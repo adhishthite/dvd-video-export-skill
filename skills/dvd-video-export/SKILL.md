@@ -20,6 +20,7 @@ description: Convert DVD-Video rips and VIDEO_TS folders into validated MP4 or M
 
 - First inspect. Do not assume dependencies, source structure, durations, audio balance, or intended output format.
 - Then report the relevant facts in plain language: what was found, what is missing, estimated duration/size when available, and what choices matter.
+- Use a structured ask-user tool when the current agent mode exposes one. If no such tool is available, ask the same choices directly in chat and wait. Do not silently replace a multi-choice decision with a default.
 - Ask the user for decisions at control points: dependency install vs stop, format/container, audio handling, quality/size tradeoff, output folder, dry-run vs real export, and cleanup.
 - Prefer safe recommendations, but present them as defaults the user can override.
 - Never bury a destructive or expensive action inside an automatic script prompt. Ask in chat before doing it.
@@ -53,9 +54,13 @@ uv run ~/.codex/skills/dvd-video-export/scripts/export_dvd_video.py doctor --jso
 uv run ~/.codex/skills/dvd-video-export/scripts/export_dvd_video.py scan /path/to/backup
 ```
 
+The scan reports suggested export groups and every discovered DVD title set. If a folder contains date folders with numbered parts, such as `4th Jan/1/VIDEO_TS` and `4th Jan/2/VIDEO_TS`, treat each date as its own candidate final video unless the user says otherwise.
+
 3. Ask the user for export knobs before encoding. Use the scan/probe results to recommend defaults, but let the user change every meaningful knob:
 
 - source DVD folder;
+- export grouping strategy: entire input as one video, one video per date/folder group, or selected groups only;
+- ordering for grouped parts, especially numbered folders like `1`, `2`, `3`;
 - output folder;
 - title/output filename;
 - audio mode (`dual-mono` recommended for interviews);
@@ -63,9 +68,9 @@ uv run ~/.codex/skills/dvd-video-export/scripts/export_dvd_video.py scan /path/t
 - output format preset (`hevc-mp4` recommended by default; also offer `h264-mp4`, `hevc-mkv`, `h264-mkv`);
 - video encoder, bitrate, maxrate, buffer size, and optional extra ffmpeg video/output args;
 - audio mode, volume, encoder, bitrate, and optional extra ffmpeg audio args;
-- DVD title set (`auto` chooses the largest title set; specify `VTS_01`, `VTS_02`, etc. when needed);
+- DVD title-set strategy (`all` combines every `VTS_*` title set in order, `auto` chooses the largest title set, or specify `VTS_01`, `VTS_02`, etc.);
 - deinterlace mode, field order, and timestamp regeneration;
-- validation sample times, sample duration, minimum output size, duration tolerance, dual-mono balance tolerance, and clipping threshold;
+- validation sample times, sample duration, minimum output size, duration tolerance, dual-mono balance tolerance, and clipping threshold; if requested samples exceed output duration, the helper auto-generates safe in-range samples;
 - progress update interval and maximum tolerated ffmpeg warning/error lines;
 - whether to dry-run first;
 - whether to keep or clean derived intermediates;
@@ -110,8 +115,9 @@ The bundled script:
 - detects one or more `VIDEO_TS` folders under the input;
 - provides a `doctor --json` command for structured dependency status after `uv` is available;
 - provides an interactive `wizard` command that asks for config knobs and requires explicit confirmation before a real export;
+- reports suggested export groups for parent folders such as date folders containing numbered DVD parts;
 - groups each `VIDEO_TS` parent as a disc or part;
-- groups VOBs by DVD title set and defaults to the largest title set unless a specific `--title-set` is provided;
+- groups VOBs by DVD title set, supports `--title-set all` to combine every title set in order, and supports explicit `VTS_01`/`VTS_02` selection;
 - rejects paths with concat-unsafe characters such as `|` or newlines;
 - uses byte-concat (`concat:file1|file2`) per disc to avoid split-VOB packet problems;
 - encodes each disc to a temporary derived file using the selected output format;
@@ -119,14 +125,15 @@ The bundled script:
 - copies video during audio-only rework when possible;
 - converts audio to centered dual-mono with channel-aware filters: duplicate mono, average stereo, and use center-weighted mixing for multi-channel audio;
 - boosts audio with `volume=<boost>` after dual-mono;
-- lets the user tune output format, video encoder, video rate control, audio encoder, audio bitrate, ffmpeg extra args, progress cadence, validation samples, validation thresholds, dry-run, overwrite, and intermediate cleanup from the wizard;
+- writes a derived `.job.json` manifest in the output folder for resumability/audit during long exports;
+- lets the user tune output format, title-set strategy, video encoder, video rate control, audio encoder, audio bitrate, ffmpeg extra args, progress cadence, validation samples, validation thresholds, dry-run, overwrite, and intermediate cleanup from the wizard;
 - refuses to write output inside the source tree or discovered DVD root unless `--allow-output-inside-source` is explicitly supplied;
 - refuses to overwrite output unless `--overwrite` is supplied;
 - fails when ffmpeg warning/error lines exceed `--max-warnings`;
 - reports progress from ffmpeg `time=`, `speed=`, output size, percent, elapsed, and ETA;
 - hard-fails validation on missing/wrong streams, duration mismatch, tiny output size, unavailable audio stats, imbalanced dual-mono samples, or near-clipping peaks.
 
-Default settings are `--output-format hevc-mp4`, `--audio-mode dual-mono`, `--volume 1.18`, `--title-set auto`, `--deinterlace auto`, `--regenerate-timestamps`, `--video-bitrate 4500k`, `--maxrate 6500k`, `--bufsize 9000k`, `--audio-encoder aac`, `--audio-bitrate 192k`, `--encoder auto`, `--samples 00:05:00 01:30:00 03:00:00`, `--sample-duration 60`, `--min-size-mb 10`, `--duration-tolerance-seconds 5`, `--duration-tolerance-ratio 0.02`, `--balance-tolerance-db 0.25`, `--clipping-peak-db -0.1`, `--stats-period 30`, and `--max-warnings 10`.
+Default settings are `--output-format hevc-mp4`, `--audio-mode dual-mono`, `--volume 1.18`, `--title-set auto`, `--deinterlace auto`, `--regenerate-timestamps`, `--video-bitrate 4500k`, `--maxrate 6500k`, `--bufsize 9000k`, `--audio-encoder aac`, `--audio-bitrate 192k`, `--encoder auto`, `--samples 00:05:00 01:30:00 03:00:00`, `--sample-duration 60`, `--min-size-mb 10`, `--duration-tolerance-seconds 5`, `--duration-tolerance-ratio 0.02`, `--balance-tolerance-db 0.25`, `--clipping-peak-db -0.1`, `--stats-period 30`, and `--max-warnings 10`. For multi-title-set discs, the wizard recommends `all` unless the user selects a specific title or largest-title-only export.
 
 ## Guardrails
 
@@ -135,7 +142,8 @@ Default settings are `--output-format hevc-mp4`, `--audio-mode dual-mono`, `--vo
 - Do not delete intermediate files until the final output is validated and the user confirms cleanup, unless the script is cleaning its own failed partial output in the export folder.
 - If ffmpeg reports warning/error lines beyond the configured threshold, stop and inspect with a short probe. Try per-disc byte-concat before using a global VOB list.
 - If duration is unexpectedly short, stop and re-plan. DVD metadata and timestamps can mislead ffmpeg.
-- If multiple title sets exist, verify the selected title set is the intended program material before running a long encode.
+- If multiple title sets exist, do not hide them behind `auto`. Present `all`, `auto`, and explicit title-set choices before running a long encode.
+- If a parent folder contains multiple dates or numbered parts, ask whether the target is one final video per date/folder group, one final video for the whole parent, or only selected groups.
 - If the user asks to delete anything, confirm it is a derived export artifact and not the original DVD backup.
 - If using the non-interactive `export` command and the user has not already specified config choices, pause and ask before running the real encode.
 - Dependency install is a skill/agent decision: inspect with shell tools first, ask the user, then run an install command only after approval. Do not rely on unattended dependency installation.

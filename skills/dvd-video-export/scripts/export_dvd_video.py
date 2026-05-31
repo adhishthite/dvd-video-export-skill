@@ -68,6 +68,16 @@ class Disc:
     duration: float | None = None
 
 
+@dataclass
+class TitleSetSummary:
+    root: Path
+    video_ts: Path
+    title_set: str
+    vobs: list[Path]
+    size: int
+    selected_by_auto: bool = False
+
+
 class ValidationError(RuntimeError):
     """Raised when a completed export does not satisfy safety checks."""
 
@@ -251,6 +261,44 @@ def main_vobs(video_ts: Path) -> list[Path]:
     return sorted(vobs, key=natural_key)
 
 
+def all_title_sets(video_ts: Path) -> list[TitleSetSummary]:
+    groups = title_set_vobs(video_ts)
+    if groups:
+        largest = max(
+            groups,
+            key=lambda key: sum(path.stat().st_size for path in groups[key]),
+        )
+        return [
+            TitleSetSummary(
+                root=video_ts.parent,
+                video_ts=video_ts,
+                title_set=key,
+                vobs=paths,
+                size=sum(path.stat().st_size for path in paths),
+                selected_by_auto=key == largest,
+            )
+            for key, paths in groups.items()
+        ]
+    vobs = main_vobs(video_ts)
+    return [
+        TitleSetSummary(
+            root=video_ts.parent,
+            video_ts=video_ts,
+            title_set="all",
+            vobs=vobs,
+            size=sum(path.stat().st_size for path in vobs),
+            selected_by_auto=True,
+        )
+    ]
+
+
+def discover_title_sets(input_path: Path) -> list[TitleSetSummary]:
+    summaries: list[TitleSetSummary] = []
+    for video_ts in find_video_ts_roots(input_path):
+        summaries.extend(all_title_sets(video_ts))
+    return summaries
+
+
 def discover_discs(input_path: Path, title_set: str = "auto") -> list[Disc]:
     roots = find_video_ts_roots(input_path)
     discs: list[Disc] = []
@@ -258,17 +306,31 @@ def discover_discs(input_path: Path, title_set: str = "auto") -> list[Disc]:
         groups = title_set_vobs(video_ts)
         if groups:
             normalized = title_set.upper()
-            if title_set.lower() == "auto":
+            title_set_mode = title_set.lower()
+            if title_set_mode == "auto":
                 selected, vobs = sorted(
                     groups.items(),
                     key=lambda item: sum(p.stat().st_size for p in item[1]),
                     reverse=True,
                 )[0]
+            elif title_set_mode == "all":
+                for selected, vobs in groups.items():
+                    for path in vobs:
+                        reject_unsafe_path(path)
+                    discs.append(
+                        Disc(
+                            root=video_ts.parent,
+                            video_ts=video_ts,
+                            vobs=vobs,
+                            title_set=selected,
+                        )
+                    )
+                continue
             else:
                 selected = normalized
                 if selected not in groups:
                     fail(
-                        f"title set {title_set} not found in {video_ts}; available: {', '.join(groups)}"
+                        f"title set {title_set} not found in {video_ts}; available: {', '.join([*groups, 'all'])}"
                     )
                 vobs = groups[selected]
         else:
@@ -282,6 +344,31 @@ def discover_discs(input_path: Path, title_set: str = "auto") -> list[Disc]:
             Disc(root=video_ts.parent, video_ts=video_ts, vobs=vobs, title_set=selected)
         )
     return discs
+
+
+def export_group_name(input_path: Path, disc_root: Path) -> str:
+    try:
+        relative = disc_root.relative_to(input_path)
+    except ValueError:
+        return disc_root.name
+    if not relative.parts:
+        return input_path.name
+    if relative.parts[0].upper() == "VIDEO_TS":
+        return input_path.name
+    return relative.parts[0]
+
+
+def export_groups(input_path: Path) -> dict[str, list[Path]]:
+    groups: dict[str, list[Path]] = {}
+    for video_ts in find_video_ts_roots(input_path):
+        group = export_group_name(input_path, video_ts.parent)
+        groups.setdefault(group, []).append(video_ts.parent)
+    return {
+        key: sorted(value, key=natural_key)
+        for key, value in sorted(
+            groups.items(), key=lambda item: natural_key(Path(item[0]))
+        )
+    }
 
 
 def ffprobe_duration(path_or_url: str) -> float | None:
@@ -468,40 +555,112 @@ def expected_audio_codec_names(args: argparse.Namespace) -> set[str]:
     return aliases.get(encoder, {encoder})
 
 
+def write_job_manifest(
+    path: Path,
+    *,
+    status: str,
+    args: argparse.Namespace,
+    input_path: Path,
+    output_path: Path,
+    discs: list[Disc],
+    parts: list[Path] | None = None,
+    error: str | None = None,
+) -> None:
+    payload = {
+        "status": status,
+        "updated_at_epoch": time.time(),
+        "source": str(input_path),
+        "output": str(output_path),
+        "title": args.title,
+        "output_format": output_format_name(args),
+        "audio_mode": args.audio_mode,
+        "volume": args.volume,
+        "title_set": args.title_set,
+        "discs": [
+            {
+                "root": str(disc.root),
+                "video_ts": str(disc.video_ts),
+                "title_set": disc.title_set or "all",
+                "vobs": [str(path) for path in disc.vobs],
+            }
+            for disc in discs
+        ],
+        "parts": [str(part) for part in (parts or [])],
+    }
+    if error:
+        payload["error"] = error
+    path.write_text(json.dumps(payload, indent=2) + "\n")
+
+
 def scan(args: argparse.Namespace) -> None:
     require_tools(install_missing=getattr(args, "install_missing_deps", False))
     roots = [resolved(Path(p)) for p in args.paths]
     rows = []
+    grouped_rows = []
     for root in roots:
         if not root.exists():
             print(f"missing: {root}", file=sys.stderr)
             continue
-        for disc in discover_discs(root, getattr(args, "title_set", "auto")):
+        for group, parts in export_groups(root).items():
+            grouped_rows.append((root, group, parts))
+        requested_title_set = getattr(args, "title_set", "auto")
+        for summary in discover_title_sets(root):
+            if requested_title_set.lower() not in {"auto", "all"}:
+                if summary.title_set != requested_title_set.upper():
+                    continue
             dvd_files = [
                 p
-                for p in disc.video_ts.iterdir()
+                for p in summary.video_ts.iterdir()
                 if p.is_file() and p.suffix.lower() in VIDEO_EXTS
             ]
-            size = sum(p.stat().st_size for p in disc.root.rglob("*") if p.is_file())
-            duration = ffprobe_duration(concat_url(disc.vobs))
+            root_size = sum(
+                p.stat().st_size for p in summary.root.rglob("*") if p.is_file()
+            )
+            duration = ffprobe_duration(concat_url(summary.vobs))
+            selected_text = "auto" if summary.selected_by_auto else ""
             rows.append(
                 (
-                    disc.root,
-                    disc.title_set or "all",
-                    size,
+                    export_group_name(root, summary.root),
+                    summary.root,
+                    summary.title_set,
+                    selected_text,
+                    summary.size,
+                    root_size,
                     len(dvd_files),
-                    len(disc.vobs),
+                    len(summary.vobs),
                     duration,
                 )
             )
     if not rows:
         print("No VIDEO_TS DVD exports found.")
         return
-    for root, title_set, size, dvd_count, vob_count, duration in rows:
+    if grouped_rows:
+        print("Suggested export groups:")
+        for root, group, parts in grouped_rows:
+            if len(parts) <= 1:
+                continue
+            print(f"  {group}: {len(parts)} numbered/source part(s) under {root}")
+        print()
+    print("DVD title sets:")
+    for (
+        group,
+        root,
+        title_set,
+        selected_text,
+        size,
+        root_size,
+        dvd_count,
+        vob_count,
+        duration,
+    ) in rows:
         size_gb = size / (1024**3)
+        root_size_gb = root_size / (1024**3)
         duration_text = fmt_time(duration) if duration else "unknown"
+        marker = f" {selected_text}" if selected_text else ""
         print(
-            f"{size_gb:5.1f}G  {duration_text:>10}  {title_set:>6}  {dvd_count:2d} DVD files  {vob_count:2d} VOBs  {root}"
+            f"{size_gb:5.1f}G/{root_size_gb:5.1f}G root  {duration_text:>10}  "
+            f"{title_set:>6}{marker:>5}  {dvd_count:2d} DVD files  {vob_count:2d} VOBs  "
+            f"group={group}  {root}"
         )
 
 
@@ -512,6 +671,47 @@ def fmt_time(seconds: float | None) -> str:
     h, rem = divmod(seconds, 3600)
     m, s = divmod(rem, 60)
     return f"{h:d}:{m:02d}:{s:02d}"
+
+
+def parse_timestamp(value: str) -> float | None:
+    parts = value.strip().split(":")
+    if not parts or len(parts) > 3:
+        return None
+    try:
+        numbers = [float(part) for part in parts]
+    except ValueError:
+        return None
+    if len(numbers) == 1:
+        return numbers[0]
+    if len(numbers) == 2:
+        minutes, seconds = numbers
+        return minutes * 60 + seconds
+    hours, minutes, seconds = numbers
+    return hours * 3600 + minutes * 60 + seconds
+
+
+def validation_samples_for_duration(
+    requested_samples: tuple[str, ...], duration: float, sample_duration: int
+) -> tuple[str, ...]:
+    if duration <= 0:
+        return requested_samples
+    latest_start = max(0, duration - max(1, sample_duration) - 1)
+    valid_requested = [
+        sample
+        for sample in requested_samples
+        if (seconds := parse_timestamp(sample)) is not None and seconds <= latest_start
+    ]
+    if valid_requested:
+        return tuple(valid_requested)
+    if latest_start <= 0:
+        return ("00:00:00",)
+    generated = []
+    for fraction in (0.1, 0.5, 0.9):
+        seconds = min(latest_start, max(0, round(duration * fraction)))
+        text = fmt_time(seconds)
+        if text not in generated:
+            generated.append(text)
+    return tuple(generated)
 
 
 def ask_text(prompt: str, default: str | None = None, *, required: bool = True) -> str:
@@ -952,7 +1152,15 @@ def validate_output(
                 f"  audio: {stream.get('codec_name')} {stream.get('channels')}ch "
                 f"{stream.get('channel_layout', '')} {stream.get('bit_rate', '')}bps"
             )
-    for ss in samples:
+    effective_samples = validation_samples_for_duration(
+        tuple(samples), duration, sample_duration
+    )
+    if tuple(samples) != effective_samples:
+        print(
+            "  validation samples adjusted for output duration: "
+            + ", ".join(effective_samples)
+        )
+    for ss in effective_samples:
         lrms, rrms, lpeak, rpeak = astats_sample(path, ss, sample_duration)
         if lrms is None or rrms is None:
             errors.append(f"sample {ss}: audio stats unavailable")
@@ -1024,22 +1232,41 @@ def export(args: argparse.Namespace) -> None:
     if args.dry_run:
         print("Dry run only; no files written.")
         return
-    parts: list[Path] = []
-    for i, disc in enumerate(discs, 1):
-        part = output_dir / f".{title}.part-{i:02d}{output_extension(args)}"
-        if part.exists() and args.overwrite:
-            part.unlink()
-        encode_disc(disc, part, args)
-        parts.append(part)
-    joined = output_dir / f".{title}.joined{output_extension(args)}"
-    if joined.exists() and args.overwrite:
-        joined.unlink()
-    join_parts(parts, joined, args)
-    rewrite_audio(joined, final_output, args)
-    expected_duration = (
-        sum((ffprobe_duration(str(part)) or 0) for part in parts) or None
+    manifest = output_dir / f".{title}.job.json"
+    write_job_manifest(
+        manifest,
+        status="started",
+        args=args,
+        input_path=input_path,
+        output_path=final_output,
+        discs=discs,
     )
+    print(f"Job manifest: {manifest}")
+    parts: list[Path] = []
     try:
+        for i, disc in enumerate(discs, 1):
+            part = output_dir / f".{title}.part-{i:02d}{output_extension(args)}"
+            if part.exists() and args.overwrite:
+                part.unlink()
+            encode_disc(disc, part, args)
+            parts.append(part)
+            write_job_manifest(
+                manifest,
+                status=f"encoded part {i}/{len(discs)}",
+                args=args,
+                input_path=input_path,
+                output_path=final_output,
+                discs=discs,
+                parts=parts,
+            )
+        joined = output_dir / f".{title}.joined{output_extension(args)}"
+        if joined.exists() and args.overwrite:
+            joined.unlink()
+        join_parts(parts, joined, args)
+        rewrite_audio(joined, final_output, args)
+        expected_duration = (
+            sum((ffprobe_duration(str(part)) or 0) for part in parts) or None
+        )
         validate_output(
             final_output,
             tuple(args.samples),
@@ -1057,6 +1284,16 @@ def export(args: argparse.Namespace) -> None:
             sample_duration=getattr(args, "sample_duration", 60),
         )
     except ValidationError as exc:
+        write_job_manifest(
+            manifest,
+            status="validation_failed",
+            args=args,
+            input_path=input_path,
+            output_path=final_output,
+            discs=discs,
+            parts=parts,
+            error=str(exc),
+        )
         print(
             "Validation failed; keeping derived intermediate files for inspection.",
             file=sys.stderr,
@@ -1069,6 +1306,15 @@ def export(args: argparse.Namespace) -> None:
             if path.exists() and is_relative_to(path.resolve(), output_dir):
                 path.unlink()
         print("Removed derived intermediate files from output directory.")
+    write_job_manifest(
+        manifest,
+        status="validated",
+        args=args,
+        input_path=input_path,
+        output_path=final_output,
+        discs=discs,
+        parts=parts,
+    )
     print("Original source files were not modified.")
 
 
@@ -1085,7 +1331,61 @@ def wizard(args: argparse.Namespace) -> None:
     if not input_path.exists():
         fail(f"input path does not exist: {input_path}")
 
-    discs = discover_discs(input_path, args.title_set)
+    groups = export_groups(input_path)
+    if groups:
+        print("Suggested export groups:")
+        for name, parts in groups.items():
+            print(f"  {name}: {len(parts)} numbered/source part(s)")
+        if len(groups) > 1:
+            scope = ask_choice(
+                "Export scope",
+                ["one-group", "entire-input"],
+                "one-group",
+            )
+            if scope == "one-group":
+                group_name = ask_choice(
+                    "Group/date to export", list(groups), list(groups)[0]
+                )
+                group_parts = groups[group_name]
+                if len(group_parts) == 1:
+                    input_path = group_parts[0]
+                elif all(part.parent == group_parts[0].parent for part in group_parts):
+                    input_path = group_parts[0].parent
+                else:
+                    fail(
+                        "selected group parts do not share one parent folder; run export on the intended parent manually"
+                    )
+                print(f"Using grouped source: {input_path}")
+
+    summaries = discover_title_sets(input_path)
+    if summaries:
+        print("Title sets found:")
+        for summary in summaries:
+            duration = ffprobe_duration(concat_url(summary.vobs))
+            marker = " auto" if summary.selected_by_auto else ""
+            print(
+                f"  {summary.root} {summary.title_set}{marker}: "
+                f"{len(summary.vobs)} VOB(s), {summary.size / (1024**3):.1f}G, "
+                f"duration={fmt_time(duration)}"
+            )
+    multi_title_sets = any(
+        len(title_set_vobs(video_ts)) > 1
+        for video_ts in find_video_ts_roots(input_path)
+    )
+    title_set_default = args.title_set
+    if multi_title_sets and args.title_set == "auto":
+        title_set_mode = ask_choice(
+            "DVD title-set strategy",
+            ["all", "auto", "explicit"],
+            "all",
+        )
+        title_set_default = (
+            ask_text("Explicit DVD title set, e.g. VTS_01", "VTS_01")
+            if title_set_mode == "explicit"
+            else title_set_mode
+        )
+
+    discs = discover_discs(input_path, title_set_default)
     if not discs:
         fail(f"no VIDEO_TS folders with VOB files found under {input_path}")
     print(f"Found {len(discs)} disc/part(s):")
@@ -1114,7 +1414,7 @@ def wizard(args: argparse.Namespace) -> None:
         "Video encoder (auto, hevc_videotoolbox, h264_videotoolbox, libx265, libx264)",
         args.encoder,
     )
-    title_set = ask_text("DVD title set to export", args.title_set)
+    title_set = ask_text("DVD title set to export", title_set_default)
     deinterlace = ask_choice(
         "Deinterlace", ["auto", "always", "never"], args.deinterlace
     )
@@ -1326,7 +1626,7 @@ def build_parser() -> argparse.ArgumentParser:
     scan_p.add_argument(
         "--title-set",
         default="auto",
-        help="DVD title set to inspect, e.g. VTS_01, or auto for the largest set",
+        help="DVD title set to inspect, e.g. VTS_01, auto for the largest set, or all",
     )
     scan_p.add_argument("--install-missing-deps", action="store_true")
     scan_p.set_defaults(func=scan)
@@ -1344,7 +1644,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--audio-mode", choices=["dual-mono", "preserve"], default="dual-mono"
     )
     wizard_p.add_argument("--volume", type=float, default=1.18)
-    wizard_p.add_argument("--title-set", default="auto")
+    wizard_p.add_argument(
+        "--title-set",
+        default="auto",
+        help="DVD title set: auto, all, or explicit VTS_01/VTS_02/etc.",
+    )
     wizard_p.add_argument(
         "--deinterlace", choices=["auto", "always", "never"], default="auto"
     )
@@ -1388,7 +1692,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--audio-mode", choices=["dual-mono", "preserve"], default="dual-mono"
     )
     export_p.add_argument("--volume", type=float, default=1.18)
-    export_p.add_argument("--title-set", default="auto")
+    export_p.add_argument(
+        "--title-set",
+        default="auto",
+        help="DVD title set: auto, all, or explicit VTS_01/VTS_02/etc.",
+    )
     export_p.add_argument(
         "--deinterlace", choices=["auto", "always", "never"], default="auto"
     )

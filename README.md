@@ -5,13 +5,17 @@ Agent skill for converting DVD-Video rips (`VIDEO_TS`, `.VOB`, `.IFO`, `.BUP`) i
 ## What it does
 
 - Scans backup folders for DVD-Video exports.
+- Reports date/folder groupings and every discovered `VTS_*` title set before export.
 - Encodes DVD rips into user-selected output presets: `hevc-mp4`, `h264-mp4`, `hevc-mkv`, or `h264-mkv`.
 - Treats original DVD/source files as read-only.
 - Writes outputs only to a separate export folder.
 - Encodes per DVD disc/part, then joins derived parts.
+- Supports `--title-set all` for discs split across multiple DVD title sets.
 - Converts interview/speech audio to centered dual-mono by default.
 - Applies a modest audio boost by default.
 - Validates duration, streams, selected video codec, size, audio balance, and clipping risk.
+- Adjusts validation sample points when default samples exceed the actual output duration.
+- Writes a derived job manifest for long exports.
 - Keeps the user in control: the agent should inspect with tools, summarize findings, ask before installs/encodes/cleanup, and then use the script as a helper.
 - Includes an interactive wizard for cases where the user wants the script to ask for configuration knobs directly.
 
@@ -64,6 +68,8 @@ Scan for DVD exports:
 uv run ~/.codex/skills/dvd-video-export/scripts/export_dvd_video.py scan /path/to/backup
 ```
 
+For folders containing date folders with numbered DVD parts, run scan on the parent. The agent should ask whether to create one video per date/folder group, one video for the whole parent, or only selected groups before starting any encode.
+
 Run the interactive wizard:
 
 ```bash
@@ -76,6 +82,7 @@ Dry-run a candidate:
 uv run ~/.codex/skills/dvd-video-export/scripts/export_dvd_video.py export \
   "/path/to/DVD title folder" \
   --output-dir "/path/to/export folder" \
+  --title-set all \
   --dry-run
 ```
 
@@ -92,6 +99,7 @@ The export helper is designed to fail closed:
 - It refuses to overwrite existing outputs unless `--overwrite` is provided.
 - It keeps derived intermediates if validation fails.
 - Cleanup only targets known derived intermediate artifacts.
+- It exposes multi-title-set DVDs instead of silently choosing only the largest title set.
 
 ## Tests
 
@@ -101,7 +109,7 @@ Run the unit tests:
 uv run -m unittest discover -s skills/dvd-video-export/tests -v
 ```
 
-The tests cover dependency preflight, DVD discovery, path guardrails, dry-run behavior, title-set selection, format presets, ffmpeg warning failure, audio filters, validation thresholds, validation failure paths, and cleanup behavior.
+The tests cover dependency preflight, DVD discovery, date/folder grouping, path guardrails, dry-run behavior, title-set selection including `all`, format presets, ffmpeg warning failure, audio filters, validation sample adjustment, validation thresholds, validation failure paths, and cleanup behavior.
 
 ## License
 

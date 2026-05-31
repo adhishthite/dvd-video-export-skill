@@ -126,6 +126,49 @@ class DVDVideoExportTests(unittest.TestCase):
             self.assertEqual(discs[0].title_set, "VTS_01")
             self.assertEqual(discs[0].vobs[0].name, "VTS_01_1.VOB")
 
+    def test_discover_discs_all_title_sets_preserves_title_order(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            video_ts = Path(tmp) / "DVD" / "VIDEO_TS"
+            touch(video_ts / "VTS_02_1.VOB")
+            touch(video_ts / "VTS_01_1.VOB")
+
+            discs = dvd.discover_discs(Path(tmp) / "DVD", "all")
+
+            self.assertEqual([disc.title_set for disc in discs], ["VTS_01", "VTS_02"])
+
+    def test_discover_title_sets_marks_largest_auto_choice(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            video_ts = Path(tmp) / "DVD" / "VIDEO_TS"
+            small = video_ts / "VTS_01_1.VOB"
+            large = video_ts / "VTS_02_1.VOB"
+            touch(small)
+            touch(large)
+            large.write_bytes(b"x" * 20)
+
+            summaries = dvd.discover_title_sets(Path(tmp) / "DVD")
+
+            selected = [item.title_set for item in summaries if item.selected_by_auto]
+            self.assertEqual(selected, ["VTS_02"])
+
+    def test_export_groups_detects_date_with_numbered_parts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "Experiences"
+            touch(root / "4th Jan" / "1" / "VIDEO_TS" / "VTS_01_1.VOB")
+            touch(root / "4th Jan" / "2" / "VIDEO_TS" / "VTS_01_1.VOB")
+            touch(root / "5th Jan" / "1" / "VIDEO_TS" / "VTS_01_1.VOB")
+
+            groups = dvd.export_groups(root)
+
+            self.assertEqual(set(groups), {"4th Jan", "5th Jan"})
+            self.assertEqual(len(groups["4th Jan"]), 2)
+
+    def test_validation_samples_are_generated_when_defaults_exceed_duration(self):
+        samples = dvd.validation_samples_for_duration(
+            ("00:05:00", "01:30:00", "03:00:00"), 100.0, 10
+        )
+
+        self.assertEqual(samples, ("0:00:10", "0:00:50", "0:01:29"))
+
     def test_unsafe_concat_path_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "bad|path.VOB"
