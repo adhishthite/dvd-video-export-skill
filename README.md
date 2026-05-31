@@ -1,17 +1,17 @@
 # DVD Video Export Skill
 
-Agent skill for converting DVD-Video rips (`VIDEO_TS`, `.VOB`, `.IFO`, `.BUP`) into validated H.265 MP4 exports with safe source handling and speech-friendly audio defaults.
+Agent skill for converting DVD-Video rips (`VIDEO_TS`, `.VOB`, `.IFO`, `.BUP`) into validated MP4 or MKV exports with safe source handling and speech-friendly audio defaults.
 
 ## What it does
 
 - Scans backup folders for DVD-Video exports.
-- Encodes DVD rips into H.265/HEVC MP4 files.
+- Encodes DVD rips into user-selected output presets: `hevc-mp4`, `h264-mp4`, `hevc-mkv`, or `h264-mkv`.
 - Treats original DVD/source files as read-only.
 - Writes outputs only to a separate export folder.
-- Encodes per DVD disc/part, then joins derived MP4 parts.
+- Encodes per DVD disc/part, then joins derived parts.
 - Converts interview/speech audio to centered dual-mono by default.
 - Applies a modest audio boost by default.
-- Validates duration, streams, codecs, size, audio balance, and clipping risk.
+- Validates duration, streams, selected video codec, size, audio balance, and clipping risk.
 - Includes an interactive wizard that asks for configuration knobs before a real encode.
 
 ## Install

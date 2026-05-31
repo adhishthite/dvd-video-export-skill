@@ -1,6 +1,6 @@
 ---
 name: dvd-video-export
-description: Convert DVD-Video rips and VIDEO_TS folders into validated H.265 MP4 exports. Use when Codex needs to scan backup folders for DVD exports, inspect VOB/IFO/BUP structures, create a single watchable H.265 MP4, preserve originals read-only, handle split VOB/DVD timestamp quirks, convert interview/speech audio to centered dual-mono, boost audio to an acceptable level, report progress/ETA, and validate duration, codec, size, and audio balance.
+description: Convert DVD-Video rips and VIDEO_TS folders into validated MP4 or MKV exports. Use when Codex needs to scan backup folders for DVD exports, inspect VOB/IFO/BUP structures, create a single watchable H.265 or H.264 export, preserve originals read-only, handle split VOB/DVD timestamp quirks, convert interview/speech audio to centered dual-mono, boost audio to an acceptable level, report progress/ETA, and validate duration, codec, size, and audio balance.
 ---
 
 # DVD Video Export
@@ -12,7 +12,7 @@ description: Convert DVD-Video rips and VIDEO_TS folders into validated H.265 MP
 - Before encoding, scan and summarize DVD candidates, sizes, streams, durations, and output plan.
 - For interviews, talks, satsangs, lectures, and speech-first DVD rips, use dual-mono audio by default: mix left and right evenly into both speakers.
 - Apply a modest audio boost by default, usually `1.15` to `1.20`; verify peaks remain below clipping.
-- Prefer H.265 MP4 with `hvc1` tagging for Apple playback. Use hardware HEVC (`hevc_videotoolbox`) for practical speed unless the user explicitly asks for slower software encoding.
+- Ask for the output format. Prefer `hevc-mp4` for compact Apple-friendly exports, but support `h264-mp4`, `hevc-mkv`, and `h264-mkv` when the user wants broader compatibility or a different container.
 - Validate outputs before claiming success: duration, size, video codec, aspect ratio, audio codec, channel count, and sampled channel balance.
 
 ## Recommended Workflow
@@ -30,7 +30,8 @@ python3 ~/.codex/skills/dvd-video-export/scripts/export_dvd_video.py scan /path/
 - title/output filename;
 - audio mode (`dual-mono` recommended for interviews);
 - volume boost (`1.18` recommended unless the user asks otherwise);
-- H.265 encoder/quality (`hevc_videotoolbox`, `4500k` default for old DVD sources);
+- output format preset (`hevc-mp4` recommended by default; also offer `h264-mp4`, `hevc-mkv`, `h264-mkv`);
+- video encoder/quality (`auto`, `hevc_videotoolbox`, `h264_videotoolbox`, `libx265`, `libx264`; `4500k` default for old DVD sources);
 - DVD title set (`auto` chooses the largest title set; specify `VTS_01`, `VTS_02`, etc. when needed);
 - deinterlace mode, field order, and timestamp regeneration;
 - maximum tolerated ffmpeg warning/error lines;
@@ -79,8 +80,8 @@ The bundled script:
 - groups VOBs by DVD title set and defaults to the largest title set unless a specific `--title-set` is provided;
 - rejects paths with concat-unsafe characters such as `|` or newlines;
 - uses byte-concat (`concat:file1|file2`) per disc to avoid split-VOB packet problems;
-- encodes each disc to a temporary derived MP4;
-- joins derived parts into one final MP4 using stream copy;
+- encodes each disc to a temporary derived file using the selected output format;
+- joins derived parts into one final MP4 or MKV using stream copy;
 - copies video during audio-only rework when possible;
 - converts audio to centered dual-mono with channel-aware filters: duplicate mono, average stereo, and use center-weighted mixing for multi-channel audio;
 - boosts audio with `volume=<boost>` after dual-mono;
@@ -90,7 +91,7 @@ The bundled script:
 - reports progress from ffmpeg `time=`, `speed=`, output size, percent, elapsed, and ETA;
 - hard-fails validation on missing/wrong streams, duration mismatch, tiny output size, unavailable audio stats, imbalanced dual-mono samples, or near-clipping peaks.
 
-Default settings are `--audio-mode dual-mono`, `--volume 1.18`, `--title-set auto`, `--deinterlace auto`, `--regenerate-timestamps`, `--video-bitrate 4500k`, `--audio-bitrate 192k`, `--encoder hevc_videotoolbox`, and `--max-warnings 10`.
+Default settings are `--output-format hevc-mp4`, `--audio-mode dual-mono`, `--volume 1.18`, `--title-set auto`, `--deinterlace auto`, `--regenerate-timestamps`, `--video-bitrate 4500k`, `--audio-bitrate 192k`, `--encoder auto`, and `--max-warnings 10`.
 
 ## Guardrails
 
@@ -116,13 +117,13 @@ Check final streams:
 ```bash
 ffprobe -v error -show_entries format=duration,size,bit_rate \
   -show_entries stream=index,codec_type,codec_name,width,height,display_aspect_ratio,channels,channel_layout,bit_rate \
-  -of default=noprint_wrappers=1 "/path/to/final.mp4"
+  -of default=noprint_wrappers=1 "/path/to/final-output.mp4"
 ```
 
 Check channel balance samples:
 
 ```bash
-ffmpeg -hide_banner -nostdin -ss 00:05:00 -t 60 -i "/path/to/final.mp4" \
+ffmpeg -hide_banner -nostdin -ss 00:05:00 -t 60 -i "/path/to/final-output.mp4" \
   -af astats=metadata=1:reset=0 -f null -
 ```
 

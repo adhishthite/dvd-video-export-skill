@@ -22,6 +22,40 @@ from pathlib import Path
 
 VIDEO_EXTS = {".vob", ".ifo", ".bup"}
 DEFAULT_SAMPLES = ("00:05:00", "01:30:00", "03:00:00")
+FORMAT_PRESETS = {
+    "hevc-mp4": {
+        "extension": ".mp4",
+        "label": "HEVC",
+        "default_encoder": "hevc_videotoolbox",
+        "expected_video_codecs": {"hevc", "h265"},
+        "tag": "hvc1",
+        "faststart": True,
+    },
+    "h264-mp4": {
+        "extension": ".mp4",
+        "label": "H264",
+        "default_encoder": "h264_videotoolbox",
+        "expected_video_codecs": {"h264"},
+        "tag": "avc1",
+        "faststart": True,
+    },
+    "hevc-mkv": {
+        "extension": ".mkv",
+        "label": "HEVC",
+        "default_encoder": "hevc_videotoolbox",
+        "expected_video_codecs": {"hevc", "h265"},
+        "tag": None,
+        "faststart": False,
+    },
+    "h264-mkv": {
+        "extension": ".mkv",
+        "label": "H264",
+        "default_encoder": "h264_videotoolbox",
+        "expected_video_codecs": {"h264"},
+        "tag": None,
+        "faststart": False,
+    },
+}
 
 
 @dataclass
@@ -269,6 +303,40 @@ def video_filter_for_disc(disc: Disc, args: argparse.Namespace) -> str:
     return ",".join(filters) or "null"
 
 
+def output_format_name(args: argparse.Namespace) -> str:
+    return getattr(args, "output_format", "hevc-mp4") or "hevc-mp4"
+
+
+def format_preset(name: str) -> dict:
+    try:
+        return FORMAT_PRESETS[name]
+    except KeyError:
+        fail(f"unknown output format: {name}; choose one of {', '.join(FORMAT_PRESETS)}")
+
+
+def selected_encoder(args: argparse.Namespace) -> str:
+    encoder = getattr(args, "encoder", "auto") or "auto"
+    if encoder == "auto":
+        return format_preset(output_format_name(args))["default_encoder"]
+    return encoder
+
+
+def video_codec_label(args: argparse.Namespace) -> str:
+    return format_preset(output_format_name(args))["label"]
+
+
+def output_extension(args: argparse.Namespace) -> str:
+    return format_preset(output_format_name(args))["extension"]
+
+
+def add_container_options(cmd: list[str], args: argparse.Namespace) -> None:
+    preset = format_preset(output_format_name(args))
+    if preset["tag"]:
+        cmd.extend(["-tag:v", preset["tag"]])
+    if preset["faststart"]:
+        cmd.extend(["-movflags", "+faststart"])
+
+
 def scan(args: argparse.Namespace) -> None:
     require_tools()
     roots = [resolved(Path(p)) for p in args.paths]
@@ -449,9 +517,7 @@ def encode_disc(disc: Disc, output: Path, args: argparse.Namespace) -> None:
         "-af",
         af,
         "-c:v",
-        args.encoder,
-        "-tag:v",
-        "hvc1",
+        selected_encoder(args),
         "-b:v",
         args.video_bitrate,
         "-maxrate",
@@ -462,10 +528,9 @@ def encode_disc(disc: Disc, output: Path, args: argparse.Namespace) -> None:
         "aac",
         "-b:a",
         args.audio_bitrate,
-        "-movflags",
-        "+faststart",
-        str(output),
     ]
+    add_container_options(cmd, args)
+    cmd.append(str(output))
     stream_ffmpeg(cmd, total_duration=duration, label=disc.root.name, max_warnings=args.max_warnings)
 
 
@@ -488,12 +553,11 @@ def join_parts(parts: list[Path], final_output: Path, args: argparse.Namespace) 
         str(list_path),
         "-c",
         "copy",
-        "-movflags",
-        "+faststart",
         "-metadata",
         f"title={args.title}",
-        str(final_output),
     ]
+    add_container_options(cmd, args)
+    cmd.append(str(final_output))
     stream_ffmpeg(cmd, total_duration=total_duration or None, label="join", max_warnings=args.max_warnings)
 
 
@@ -540,12 +604,11 @@ def rewrite_audio(input_file: Path, output_file: Path, args: argparse.Namespace)
         "aac",
         "-b:a",
         args.audio_bitrate,
-        "-movflags",
-        "+faststart",
         "-metadata",
         f"title={args.title}",
-        str(output_file),
     ]
+    add_container_options(cmd, args)
+    cmd.append(str(output_file))
     stream_ffmpeg(cmd, total_duration=duration, label="audio balance/boost", max_warnings=args.max_warnings)
 
 
@@ -617,6 +680,7 @@ def validate_output(
     *,
     expected_duration: float | None = None,
     expect_balanced: bool = True,
+    expected_video_codecs: set[str] | None = None,
     min_size_bytes: int = 10 * 1024 * 1024,
 ) -> None:
     summary = ffprobe_summary(path)
@@ -650,7 +714,8 @@ def validate_output(
         errors.append("missing audio stream")
     for stream in streams:
         if stream.get("codec_type") == "video":
-            if stream.get("codec_name") not in {"hevc", "h265"}:
+            allowed_video_codecs = expected_video_codecs or {"hevc", "h265"}
+            if stream.get("codec_name") not in allowed_video_codecs:
                 errors.append(f"unexpected video codec: {stream.get('codec_name')}")
             print(
                 f"  video: {stream.get('codec_name')} {stream.get('width')}x{stream.get('height')} "
@@ -705,7 +770,8 @@ def export(args: argparse.Namespace) -> None:
     args.title = title
     audio_label = "Dual Mono" if args.audio_mode == "dual-mono" else "Stereo"
     boost_label = f" +{int(round((args.volume - 1) * 100))}pct Audio" if args.volume != 1.0 else ""
-    final_output = output_dir / f"{title} H265 {audio_label}{boost_label}.mp4"
+    format_preset(output_format_name(args))
+    final_output = output_dir / f"{title} {video_codec_label(args)} {audio_label}{boost_label}{output_extension(args)}"
     if final_output.exists() and not args.overwrite:
         fail(f"output already exists: {final_output}; pass --overwrite or choose another title")
     print(f"Input: {input_path}")
@@ -714,18 +780,19 @@ def export(args: argparse.Namespace) -> None:
         duration = ffprobe_duration(concat_url(disc.vobs))
         print(f"  {i}. {disc.root}  title_set={disc.title_set or 'all'}  VOBs={len(disc.vobs)}  duration={fmt_time(duration)}")
     print(f"Output: {final_output}")
+    print(f"Format: {output_format_name(args)}, encoder={selected_encoder(args)}")
     print(f"Audio: {args.audio_mode}, volume={args.volume}")
     if args.dry_run:
         print("Dry run only; no files written.")
         return
     parts: list[Path] = []
     for i, disc in enumerate(discs, 1):
-        part = output_dir / f".{title}.part-{i:02d}.mp4"
+        part = output_dir / f".{title}.part-{i:02d}{output_extension(args)}"
         if part.exists() and args.overwrite:
             part.unlink()
         encode_disc(disc, part, args)
         parts.append(part)
-    joined = output_dir / f".{title}.joined.mp4"
+    joined = output_dir / f".{title}.joined{output_extension(args)}"
     if joined.exists() and args.overwrite:
         joined.unlink()
     join_parts(parts, joined, args)
@@ -737,6 +804,7 @@ def export(args: argparse.Namespace) -> None:
             tuple(args.samples),
             expected_duration=expected_duration,
             expect_balanced=args.audio_mode == "dual-mono",
+            expected_video_codecs=format_preset(output_format_name(args))["expected_video_codecs"],
         )
     except ValidationError as exc:
         print("Validation failed; keeping derived intermediate files for inspection.", file=sys.stderr)
@@ -769,12 +837,13 @@ def wizard(args: argparse.Namespace) -> None:
         print(f"  {i}. {disc.root}  title_set={disc.title_set or 'all'}  VOBs={len(disc.vobs)}  duration={fmt_time(duration)}")
 
     default_title = safe_title(args.title or input_path.name)
-    default_output = str(Path.home() / "Desktop" / f"{default_title} H265")
+    default_output = str(Path.home() / "Desktop" / f"{default_title} {video_codec_label(args)}")
     output_dir = ask_text("Output folder for derived files", args.output_dir or default_output)
     title = ask_text("Output title", default_title)
+    output_format = ask_choice("Output format", list(FORMAT_PRESETS), args.output_format)
     audio_mode = ask_choice("Audio mode", ["dual-mono", "preserve"], args.audio_mode)
     volume = ask_float("Audio volume multiplier", args.volume, min_value=0.5, max_value=2.0)
-    encoder = ask_choice("H.265 encoder", ["hevc_videotoolbox", "libx265"], args.encoder)
+    encoder = ask_text("Video encoder (auto, hevc_videotoolbox, h264_videotoolbox, libx265, libx264)", args.encoder)
     title_set = ask_text("DVD title set to export", args.title_set)
     deinterlace = ask_choice("Deinterlace", ["auto", "always", "never"], args.deinterlace)
     field_order = ask_choice("Field order", ["auto", "bff", "tff"], args.field_order)
@@ -790,6 +859,7 @@ def wizard(args: argparse.Namespace) -> None:
         input=str(input_path),
         output_dir=output_dir,
         title=title,
+        output_format=output_format,
         audio_mode=audio_mode,
         volume=volume,
         title_set=title_set,
@@ -817,7 +887,7 @@ def wizard(args: argparse.Namespace) -> None:
     print(f"  audio: {planned.audio_mode}, volume={planned.volume}, bitrate={planned.audio_bitrate}")
     print(f"  title set: {planned.title_set}")
     print(
-        f"  video: encoder={planned.encoder}, bitrate={planned.video_bitrate}, "
+        f"  video: format={planned.output_format}, encoder={selected_encoder(planned)}, bitrate={planned.video_bitrate}, "
         f"deinterlace={planned.deinterlace}, field_order={planned.field_order}, "
         f"regenerate_timestamps={planned.regenerate_timestamps}"
     )
@@ -838,7 +908,23 @@ def clean(args: argparse.Namespace) -> None:
     output_dir = resolved(Path(args.output_dir))
     if not output_dir.exists():
         fail(f"output directory does not exist: {output_dir}")
-    patterns = ["*.part-*.mp4", ".*.part-*.mp4", "*.joined.mp4", ".*.joined.mp4", "*.parts.txt", "parts.txt", "vob-concat-list.txt"]
+    patterns = [
+        "*.part-*.mp4",
+        ".*.part-*.mp4",
+        "*.part-*.mkv",
+        ".*.part-*.mkv",
+        "*.part-*.mov",
+        ".*.part-*.mov",
+        "*.joined.mp4",
+        ".*.joined.mp4",
+        "*.joined.mkv",
+        ".*.joined.mkv",
+        "*.joined.mov",
+        ".*.joined.mov",
+        "*.parts.txt",
+        "parts.txt",
+        "vob-concat-list.txt",
+    ]
     removed = []
     for pattern in patterns:
         for path in output_dir.glob(pattern):
@@ -864,6 +950,7 @@ def build_parser() -> argparse.ArgumentParser:
     wizard_p.add_argument("input", nargs="?")
     wizard_p.add_argument("--output-dir")
     wizard_p.add_argument("--title")
+    wizard_p.add_argument("--output-format", choices=list(FORMAT_PRESETS), default="hevc-mp4")
     wizard_p.add_argument("--audio-mode", choices=["dual-mono", "preserve"], default="dual-mono")
     wizard_p.add_argument("--volume", type=float, default=1.18)
     wizard_p.add_argument("--title-set", default="auto")
@@ -874,16 +961,17 @@ def build_parser() -> argparse.ArgumentParser:
     wizard_p.add_argument("--maxrate", default="6500k")
     wizard_p.add_argument("--bufsize", default="9000k")
     wizard_p.add_argument("--audio-bitrate", default="192k")
-    wizard_p.add_argument("--encoder", choices=["hevc_videotoolbox", "libx265"], default="hevc_videotoolbox")
+    wizard_p.add_argument("--encoder", default="auto")
     wizard_p.add_argument("--max-warnings", type=int, default=10)
     wizard_p.add_argument("--stats-period", type=float, default=30)
     wizard_p.add_argument("--samples", nargs="*", default=list(DEFAULT_SAMPLES))
     wizard_p.set_defaults(func=wizard)
 
-    export_p = sub.add_parser("export", help="Export a DVD folder to H.265 MP4")
+    export_p = sub.add_parser("export", help="Export a DVD folder to a validated MP4 or MKV")
     export_p.add_argument("input")
     export_p.add_argument("--output-dir", required=True)
     export_p.add_argument("--title")
+    export_p.add_argument("--output-format", choices=list(FORMAT_PRESETS), default="hevc-mp4")
     export_p.add_argument("--audio-mode", choices=["dual-mono", "preserve"], default="dual-mono")
     export_p.add_argument("--volume", type=float, default=1.18)
     export_p.add_argument("--title-set", default="auto")
@@ -894,7 +982,7 @@ def build_parser() -> argparse.ArgumentParser:
     export_p.add_argument("--maxrate", default="6500k")
     export_p.add_argument("--bufsize", default="9000k")
     export_p.add_argument("--audio-bitrate", default="192k")
-    export_p.add_argument("--encoder", default="hevc_videotoolbox")
+    export_p.add_argument("--encoder", default="auto")
     export_p.add_argument("--max-warnings", type=int, default=10)
     export_p.add_argument("--stats-period", type=float, default=30)
     export_p.add_argument("--samples", nargs="*", default=list(DEFAULT_SAMPLES))

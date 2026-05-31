@@ -145,6 +145,22 @@ class DVDVideoExportTests(unittest.TestCase):
         with mock.patch.object(dvd, "ffprobe_audio_info", return_value={"channels": 6}):
             self.assertIn("0.5*c2", dvd.audio_filter(args, Path("in.mp4")))
 
+    def test_format_presets_select_encoder_extension_and_container_flags(self):
+        hevc_mp4 = argparse.Namespace(output_format="hevc-mp4", encoder="auto")
+        h264_mkv = argparse.Namespace(output_format="h264-mkv", encoder="auto")
+        self.assertEqual(dvd.selected_encoder(hevc_mp4), "hevc_videotoolbox")
+        self.assertEqual(dvd.output_extension(hevc_mp4), ".mp4")
+        mp4_cmd = []
+        dvd.add_container_options(mp4_cmd, hevc_mp4)
+        self.assertIn("-tag:v", mp4_cmd)
+        self.assertIn("+faststart", mp4_cmd)
+
+        self.assertEqual(dvd.selected_encoder(h264_mkv), "h264_videotoolbox")
+        self.assertEqual(dvd.output_extension(h264_mkv), ".mkv")
+        mkv_cmd = []
+        dvd.add_container_options(mkv_cmd, h264_mkv)
+        self.assertEqual(mkv_cmd, [])
+
     def test_video_filter_uses_probed_frame_rate_and_field_order(self):
         args = argparse.Namespace(deinterlace="auto", field_order="auto", regenerate_timestamps=True)
         disc = dvd.Disc(root=Path("/tmp/dvd"), video_ts=Path("/tmp/dvd/VIDEO_TS"), vobs=[Path("/tmp/dvd/VIDEO_TS/VTS_01_1.VOB")])
@@ -220,6 +236,29 @@ class DVDVideoExportTests(unittest.TestCase):
                 with redirect_stdout(io.StringIO()), self.assertRaises(dvd.ValidationError):
                     dvd.validate_output(output, ("00:00:00",), expected_duration=100, expect_balanced=True)
 
+    def test_validate_output_accepts_h264_when_expected(self):
+        summary = {
+            "format": {"duration": "100", "size": str(20 * 1024 * 1024)},
+            "streams": [
+                {"codec_type": "video", "codec_name": "h264", "width": 720, "height": 576},
+                {"codec_type": "audio", "codec_name": "aac", "channels": 2},
+            ],
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "out.mp4"
+            touch(output)
+            with mock.patch.object(dvd, "ffprobe_summary", return_value=summary), mock.patch.object(
+                dvd, "astats_sample", return_value=(-20.0, -20.0, -3.0, -3.0)
+            ):
+                with redirect_stdout(io.StringIO()):
+                    dvd.validate_output(
+                        output,
+                        ("00:00:00",),
+                        expected_duration=100,
+                        expect_balanced=True,
+                        expected_video_codecs={"h264"},
+                    )
+
     def test_export_dry_run_writes_no_files_and_discovers_plan(self):
         with tempfile.TemporaryDirectory() as tmp:
             source = Path(tmp) / "DVD Source"
@@ -232,6 +271,7 @@ class DVDVideoExportTests(unittest.TestCase):
                 title="My Export",
                 audio_mode="dual-mono",
                 volume=1.18,
+                output_format="h264-mkv",
                 title_set="auto",
                 deinterlace="auto",
                 field_order="auto",

@@ -10,7 +10,7 @@
 - For interviews and speech-first recordings, original stereo may be unbalanced. Dual-mono is usually better than preserving misleading stereo separation.
 - For 5.1 or other multi-channel speech recordings, center channel content is often important. Use a center-aware dual-mono mix rather than only averaging front-left and front-right.
 - A modest post-mix volume boost such as `volume=1.18` raises perceived loudness without aggressive normalization. Always sample peaks afterward.
-- Hardware H.265 (`hevc_videotoolbox`) is much faster than `libx265`. For old DVD sources, a high hardware bitrate such as `4500k` is a practical archive/watchable tradeoff.
+- Hardware H.265 (`hevc_videotoolbox`) is much faster than `libx265`. For old DVD sources, a high hardware bitrate such as `4500k` is a practical archive/watchable tradeoff. Use H.264 presets when device compatibility matters more than file size, and MKV presets when the user wants a non-MP4 container.
 
 ## Expected validation evidence
 
