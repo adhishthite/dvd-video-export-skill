@@ -1,7 +1,5 @@
 # DVD Video Export Skill
 
-[![skills.sh](https://skills.sh/b/adhishthite/dvd-video-export-skill)](https://skills.sh/adhishthite/dvd-video-export-skill)
-
 Agent skill for converting DVD-Video rips (`VIDEO_TS`, `.VOB`, `.IFO`, `.BUP`) into validated H.265 MP4 exports with safe source handling and speech-friendly audio defaults.
 
 ## What it does
@@ -22,6 +20,12 @@ Install with the Vercel `skills` CLI:
 
 ```bash
 npx skills add adhishthite/dvd-video-export-skill --skill dvd-video-export -a codex
+```
+
+The skills.sh badge can be added after the repository is indexed by skills.sh:
+
+```md
+[![skills.sh](https://skills.sh/b/adhishthite/dvd-video-export-skill)](https://skills.sh/adhishthite/dvd-video-export-skill)
 ```
 
 Or install directly from the skill path:
