@@ -1,6 +1,7 @@
 import argparse
 import importlib.util
 import io
+import json
 import sys
 import tempfile
 import unittest
@@ -33,6 +34,46 @@ class DVDVideoExportTests(unittest.TestCase):
         line = "frame=123 time=01:02:03.40 bitrate=0.0 speed=21.5x"
         self.assertAlmostEqual(dvd.parse_time(line), 3723.4)
         self.assertEqual(dvd.parse_speed(line), "21.5x")
+
+    def test_missing_tool_package_mapping_deduplicates_ffmpeg(self):
+        self.assertEqual(
+            dvd.install_packages_for_tools(["uv", "ffmpeg", "ffprobe"]),
+            ["uv", "ffmpeg"],
+        )
+
+    def test_require_tools_exits_non_interactively_when_missing(self):
+        with (
+            mock.patch.object(dvd, "missing_tools", return_value=["uv", "ffmpeg"]),
+            mock.patch.object(dvd.sys.stdin, "isatty", return_value=False),
+            redirect_stderr(io.StringIO()),
+            self.assertRaises(SystemExit),
+        ):
+            dvd.require_tools()
+
+    def test_require_tools_installs_when_requested(self):
+        with (
+            mock.patch.object(dvd, "missing_tools", side_effect=[["uv"], []]),
+            mock.patch.object(dvd, "install_missing_tools") as install,
+            redirect_stderr(io.StringIO()),
+        ):
+            dvd.require_tools(install_missing=True)
+
+        install.assert_called_once_with(["uv"])
+
+    def test_doctor_reports_missing_tools_as_json(self):
+        with (
+            mock.patch.object(dvd, "missing_tools", return_value=["ffmpeg", "ffprobe"]),
+            mock.patch.object(
+                dvd.shutil, "which", return_value="/opt/homebrew/bin/brew"
+            ),
+            redirect_stdout(io.StringIO()) as output,
+        ):
+            dvd.doctor(argparse.Namespace(json=True))
+
+        data = json.loads(output.getvalue())
+        self.assertFalse(data["ok"])
+        self.assertEqual(data["missing_tools"], ["ffmpeg", "ffprobe"])
+        self.assertEqual(data["install_command"], "brew install ffmpeg")
 
     def test_main_vobs_excludes_menu_and_natural_sorts(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -12,7 +12,8 @@ Agent skill for converting DVD-Video rips (`VIDEO_TS`, `.VOB`, `.IFO`, `.BUP`) i
 - Converts interview/speech audio to centered dual-mono by default.
 - Applies a modest audio boost by default.
 - Validates duration, streams, selected video codec, size, audio balance, and clipping risk.
-- Includes an interactive wizard that asks for configuration knobs before a real encode, including format, codecs, rate control, audio handling, validation thresholds, progress cadence, overwrite behavior, and cleanup.
+- Keeps the user in control: the agent should inspect with tools, summarize findings, ask before installs/encodes/cleanup, and then use the script as a helper.
+- Includes an interactive wizard for cases where the user wants the script to ask for configuration knobs directly.
 
 ## Install
 
@@ -48,22 +49,28 @@ brew install ffmpeg
 
 ## Usage
 
+Check local dependencies:
+
+```bash
+for tool in uv ffmpeg ffprobe; do command -v "$tool" >/dev/null || echo "missing:$tool"; done
+```
+
 Scan for DVD exports:
 
 ```bash
-python3 ~/.codex/skills/dvd-video-export/scripts/export_dvd_video.py scan /path/to/backup
+uv run ~/.codex/skills/dvd-video-export/scripts/export_dvd_video.py scan /path/to/backup
 ```
 
 Run the interactive wizard:
 
 ```bash
-python3 ~/.codex/skills/dvd-video-export/scripts/export_dvd_video.py wizard
+uv run ~/.codex/skills/dvd-video-export/scripts/export_dvd_video.py wizard
 ```
 
 Dry-run a candidate:
 
 ```bash
-python3 ~/.codex/skills/dvd-video-export/scripts/export_dvd_video.py export \
+uv run ~/.codex/skills/dvd-video-export/scripts/export_dvd_video.py export \
   "/path/to/DVD title folder" \
   --output-dir "/path/to/export folder" \
   --dry-run
@@ -88,7 +95,7 @@ The export helper is designed to fail closed:
 Run the unit tests:
 
 ```bash
-python3 -m unittest discover -s skills/dvd-video-export/tests -v
+uv run -m unittest discover -s skills/dvd-video-export/tests -v
 ```
 
 The tests cover DVD discovery, path guardrails, dry-run behavior, title-set selection, format presets, ffmpeg warning failure, audio filters, validation thresholds, validation failure paths, and cleanup behavior.

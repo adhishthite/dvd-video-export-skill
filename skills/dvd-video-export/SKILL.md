@@ -7,6 +7,7 @@ description: Convert DVD-Video rips and VIDEO_TS folders into validated MP4 or M
 
 ## Core Rules
 
+- The user is the control point. Use tools to inspect, report concrete findings, and ask before installing dependencies, starting long encodes, overwriting outputs, cleaning intermediates, or changing safety limits.
 - Treat every source DVD folder as read-only. Never modify or delete `.VOB`, `.IFO`, `.BUP`, `VIDEO_TS`, or backup-source files.
 - Write exports only to a separate output folder, preferably outside the source tree.
 - Before encoding, scan and summarize DVD candidates, sizes, streams, durations, and output plan.
@@ -15,15 +16,44 @@ description: Convert DVD-Video rips and VIDEO_TS folders into validated MP4 or M
 - Ask for the output format. Prefer `hevc-mp4` for compact Apple-friendly exports, but support `h264-mp4`, `hevc-mkv`, and `h264-mkv` when the user wants broader compatibility or a different container.
 - Validate outputs before claiming success: duration, size, video codec, aspect ratio, audio codec, channel count, and sampled channel balance.
 
+## User-Centered Flow
+
+- First inspect. Do not assume dependencies, source structure, durations, audio balance, or intended output format.
+- Then report the relevant facts in plain language: what was found, what is missing, estimated duration/size when available, and what choices matter.
+- Ask the user for decisions at control points: dependency install vs stop, format/container, audio handling, quality/size tradeoff, output folder, dry-run vs real export, and cleanup.
+- Prefer safe recommendations, but present them as defaults the user can override.
+- Never bury a destructive or expensive action inside an automatic script prompt. Ask in chat before doing it.
+- During long work, provide progress, percent, speed, ETA, and current output path.
+
 ## Recommended Workflow
 
-1. Locate DVD exports:
+1. Check dependencies with tools before scanning or exporting. Because `uv` itself may be missing, start with the shell rather than the Python helper:
 
 ```bash
-python3 ~/.codex/skills/dvd-video-export/scripts/export_dvd_video.py scan /path/to/backup
+for tool in uv ffmpeg ffprobe; do command -v "$tool" >/dev/null || echo "missing:$tool"; done
 ```
 
-2. Ask the user for export knobs before encoding. Cover at least:
+If any tool is missing, tell the user exactly what is missing and ask whether they want to install the missing tools or stop. Do not install automatically from the skill. If the user approves installation and Homebrew is available, install the reported packages, usually:
+
+```bash
+brew install uv ffmpeg
+```
+
+`ffprobe` is included with the Homebrew `ffmpeg` package.
+
+After `uv` is available, the helper can also report dependency status as JSON:
+
+```bash
+uv run ~/.codex/skills/dvd-video-export/scripts/export_dvd_video.py doctor --json
+```
+
+2. Locate DVD exports:
+
+```bash
+uv run ~/.codex/skills/dvd-video-export/scripts/export_dvd_video.py scan /path/to/backup
+```
+
+3. Ask the user for export knobs before encoding. Use the scan/probe results to recommend defaults, but let the user change every meaningful knob:
 
 - source DVD folder;
 - output folder;
@@ -45,31 +75,31 @@ python3 ~/.codex/skills/dvd-video-export/scripts/export_dvd_video.py scan /path/
 Use the interactive wizard when the user wants the script to ask:
 
 ```bash
-python3 ~/.codex/skills/dvd-video-export/scripts/export_dvd_video.py wizard
+uv run ~/.codex/skills/dvd-video-export/scripts/export_dvd_video.py wizard
 ```
 
-3. Dry-run a candidate before writing video:
+4. Dry-run a candidate before writing video:
 
 ```bash
-python3 ~/.codex/skills/dvd-video-export/scripts/export_dvd_video.py export \
+uv run ~/.codex/skills/dvd-video-export/scripts/export_dvd_video.py export \
   "/path/to/DVD title folder" \
   --output-dir "/path/to/export folder" \
   --dry-run
 ```
 
-4. Encode the export:
+5. Encode the export:
 
 ```bash
-python3 ~/.codex/skills/dvd-video-export/scripts/export_dvd_video.py export \
+uv run ~/.codex/skills/dvd-video-export/scripts/export_dvd_video.py export \
   "/path/to/DVD title folder" \
   --output-dir "/path/to/export folder" \
   --title "Readable Title"
 ```
 
-5. If the user is happy with the final file, clean only derived intermediates:
+6. If the user is happy with the final file, clean only derived intermediates:
 
 ```bash
-python3 ~/.codex/skills/dvd-video-export/scripts/export_dvd_video.py clean \
+uv run ~/.codex/skills/dvd-video-export/scripts/export_dvd_video.py clean \
   "/path/to/export folder"
 ```
 
@@ -78,6 +108,7 @@ python3 ~/.codex/skills/dvd-video-export/scripts/export_dvd_video.py clean \
 The bundled script:
 
 - detects one or more `VIDEO_TS` folders under the input;
+- provides a `doctor --json` command for structured dependency status after `uv` is available;
 - provides an interactive `wizard` command that asks for config knobs and requires explicit confirmation before a real export;
 - groups each `VIDEO_TS` parent as a disc or part;
 - groups VOBs by DVD title set and defaults to the largest title set unless a specific `--title-set` is provided;
@@ -107,6 +138,7 @@ Default settings are `--output-format hevc-mp4`, `--audio-mode dual-mono`, `--vo
 - If multiple title sets exist, verify the selected title set is the intended program material before running a long encode.
 - If the user asks to delete anything, confirm it is a derived export artifact and not the original DVD backup.
 - If using the non-interactive `export` command and the user has not already specified config choices, pause and ask before running the real encode.
+- Dependency install is a skill/agent decision: inspect with shell tools first, ask the user, then run an install command only after approval. Do not rely on unattended dependency installation.
 
 ## Useful Checks
 
@@ -134,7 +166,7 @@ ffmpeg -hide_banner -nostdin -ss 00:05:00 -t 60 -i "/path/to/final-output.mp4" \
 Run the unit tests after editing the script:
 
 ```bash
-python3 -m unittest discover -s ~/.codex/skills/dvd-video-export/tests -v
+uv run -m unittest discover -s ~/.codex/skills/dvd-video-export/tests -v
 ```
 
 ## Reference

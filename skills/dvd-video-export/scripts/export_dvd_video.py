@@ -22,6 +22,7 @@ from pathlib import Path
 
 VIDEO_EXTS = {".vob", ".ifo", ".bup"}
 DEFAULT_SAMPLES = ("00:05:00", "01:30:00", "03:00:00")
+REQUIRED_TOOLS = ("uv", "ffmpeg", "ffprobe")
 FORMAT_PRESETS = {
     "hevc-mp4": {
         "extension": ".mp4",
@@ -91,10 +92,92 @@ def run(
         fail(f"required command not found: {cmd[0]}")
 
 
-def require_tools() -> None:
-    for tool in ("ffmpeg", "ffprobe"):
-        if shutil.which(tool) is None:
-            fail(f"{tool} is required")
+def missing_tools() -> list[str]:
+    return [tool for tool in REQUIRED_TOOLS if shutil.which(tool) is None]
+
+
+def install_packages_for_tools(tools: list[str]) -> list[str]:
+    packages = []
+    if "uv" in tools:
+        packages.append("uv")
+    if "ffmpeg" in tools or "ffprobe" in tools:
+        packages.append("ffmpeg")
+    return packages
+
+
+def install_missing_tools(tools: list[str]) -> None:
+    packages = install_packages_for_tools(tools)
+    if not packages:
+        return
+    if shutil.which("brew") is None:
+        fail(
+            "missing required tools and Homebrew is not available for automatic install: "
+            f"{', '.join(tools)}. Install Homebrew, then run: brew install {' '.join(packages)}"
+        )
+    print(f"Installing missing dependencies with Homebrew: {' '.join(packages)}")
+    run(["brew", "install", *packages])
+
+
+def require_tools(*, install_missing: bool = False) -> None:
+    missing = missing_tools()
+    if not missing:
+        return
+    print(f"Missing required tools: {', '.join(missing)}", file=sys.stderr)
+    packages = install_packages_for_tools(missing)
+    print(f"Install command: brew install {' '.join(packages)}", file=sys.stderr)
+    if install_missing:
+        install_missing_tools(missing)
+        remaining = missing_tools()
+        if remaining:
+            fail(
+                f"dependency install completed, but still missing: {', '.join(remaining)}"
+            )
+        return
+    if sys.stdin.isatty():
+        choice = (
+            input("Install missing dependencies now with Homebrew? (yes/no): ")
+            .strip()
+            .lower()
+        )
+        if choice in {"y", "yes"}:
+            install_missing_tools(missing)
+            remaining = missing_tools()
+            if remaining:
+                fail(
+                    f"dependency install completed, but still missing: {', '.join(remaining)}"
+                )
+            return
+        fail(
+            "missing required tools; install them or rerun with --install-missing-deps"
+        )
+    fail(
+        "missing required tools; install them or rerun interactively with --install-missing-deps"
+    )
+
+
+def doctor(args: argparse.Namespace) -> None:
+    missing = missing_tools()
+    packages = install_packages_for_tools(missing)
+    status = {
+        "ok": not missing,
+        "required_tools": list(REQUIRED_TOOLS),
+        "missing_tools": missing,
+        "install_command": f"brew install {' '.join(packages)}" if packages else "",
+        "brew_available": shutil.which("brew") is not None,
+    }
+    if args.json:
+        print(json.dumps(status, indent=2))
+        return
+    if status["ok"]:
+        print("All required tools are installed: uv, ffmpeg, ffprobe")
+        return
+    print(f"Missing required tools: {', '.join(missing)}")
+    if status["brew_available"]:
+        print(f"Suggested install command: {status['install_command']}")
+    else:
+        print(
+            "Homebrew was not found; install missing tools manually before exporting."
+        )
 
 
 def resolved(path: Path) -> Path:
@@ -386,7 +469,7 @@ def expected_audio_codec_names(args: argparse.Namespace) -> set[str]:
 
 
 def scan(args: argparse.Namespace) -> None:
-    require_tools()
+    require_tools(install_missing=getattr(args, "install_missing_deps", False))
     roots = [resolved(Path(p)) for p in args.paths]
     rows = []
     for root in roots:
@@ -894,7 +977,7 @@ def validate_output(
 
 
 def export(args: argparse.Namespace) -> None:
-    require_tools()
+    require_tools(install_missing=getattr(args, "install_missing_deps", False))
     input_path = resolved(Path(args.input))
     output_dir = resolved(Path(args.output_dir))
     if not input_path.exists():
@@ -990,7 +1073,7 @@ def export(args: argparse.Namespace) -> None:
 
 
 def wizard(args: argparse.Namespace) -> None:
-    require_tools()
+    require_tools(install_missing=getattr(args, "install_missing_deps", False))
     print("DVD Video Export wizard")
     print(
         "Rule: source DVD/backup files are read-only; output must be a separate derived export folder."
@@ -1151,6 +1234,7 @@ def wizard(args: argparse.Namespace) -> None:
         overwrite=overwrite,
         keep_intermediates=keep_intermediates,
         allow_output_inside_source=allow_output_inside_source,
+        install_missing_deps=False,
     )
 
     print("\nPlanned export:")
@@ -1233,6 +1317,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
+    doctor_p = sub.add_parser("doctor", help="Check required local tools")
+    doctor_p.add_argument("--json", action="store_true")
+    doctor_p.set_defaults(func=doctor)
+
     scan_p = sub.add_parser("scan", help="Scan paths for VIDEO_TS DVD exports")
     scan_p.add_argument("paths", nargs="+")
     scan_p.add_argument(
@@ -1240,6 +1328,7 @@ def build_parser() -> argparse.ArgumentParser:
         default="auto",
         help="DVD title set to inspect, e.g. VTS_01, or auto for the largest set",
     )
+    scan_p.add_argument("--install-missing-deps", action="store_true")
     scan_p.set_defaults(func=scan)
 
     wizard_p = sub.add_parser(
@@ -1283,6 +1372,7 @@ def build_parser() -> argparse.ArgumentParser:
     wizard_p.add_argument("--duration-tolerance-ratio", type=float, default=0.02)
     wizard_p.add_argument("--balance-tolerance-db", type=float, default=0.25)
     wizard_p.add_argument("--clipping-peak-db", type=float, default=-0.1)
+    wizard_p.add_argument("--install-missing-deps", action="store_true")
     wizard_p.set_defaults(func=wizard)
 
     export_p = sub.add_parser(
@@ -1330,6 +1420,7 @@ def build_parser() -> argparse.ArgumentParser:
     export_p.add_argument("--overwrite", action="store_true")
     export_p.add_argument("--keep-intermediates", action="store_true")
     export_p.add_argument("--allow-output-inside-source", action="store_true")
+    export_p.add_argument("--install-missing-deps", action="store_true")
     export_p.set_defaults(func=export)
 
     clean_p = sub.add_parser(
