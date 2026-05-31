@@ -12,6 +12,7 @@ import json
 import math
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -337,6 +338,33 @@ def add_container_options(cmd: list[str], args: argparse.Namespace) -> None:
         cmd.extend(["-movflags", "+faststart"])
 
 
+def split_extra_args(value: str | None) -> list[str]:
+    if not value:
+        return []
+    try:
+        return shlex.split(value)
+    except ValueError as exc:
+        fail(f"could not parse extra ffmpeg args {value!r}: {exc}")
+
+
+def audio_encoder(args: argparse.Namespace) -> str:
+    return getattr(args, "audio_encoder", "aac") or "aac"
+
+
+def expected_audio_codec_names(args: argparse.Namespace) -> set[str]:
+    encoder = audio_encoder(args)
+    aliases = {
+        "aac": {"aac"},
+        "libfdk_aac": {"aac"},
+        "libopus": {"opus"},
+        "opus": {"opus"},
+        "mp3": {"mp3"},
+        "libmp3lame": {"mp3"},
+        "ac3": {"ac3"},
+    }
+    return aliases.get(encoder, {encoder})
+
+
 def scan(args: argparse.Namespace) -> None:
     require_tools()
     roots = [resolved(Path(p)) for p in args.paths]
@@ -413,6 +441,19 @@ def ask_float(prompt: str, default: float, *, min_value: float, max_value: float
             value = float(raw)
         except ValueError:
             print("Enter a number.")
+            continue
+        if min_value <= value <= max_value:
+            return value
+        print(f"Enter a value from {min_value} to {max_value}.")
+
+
+def ask_int(prompt: str, default: int, *, min_value: int, max_value: int) -> int:
+    while True:
+        raw = ask_text(prompt, str(default))
+        try:
+            value = int(raw)
+        except ValueError:
+            print("Enter an integer.")
             continue
         if min_value <= value <= max_value:
             return value
@@ -525,10 +566,12 @@ def encode_disc(disc: Disc, output: Path, args: argparse.Namespace) -> None:
         "-bufsize",
         args.bufsize,
         "-c:a",
-        "aac",
+        audio_encoder(args),
         "-b:a",
         args.audio_bitrate,
     ]
+    cmd.extend(split_extra_args(getattr(args, "extra_video_args", "")))
+    cmd.extend(split_extra_args(getattr(args, "extra_output_args", "")))
     add_container_options(cmd, args)
     cmd.append(str(output))
     stream_ffmpeg(cmd, total_duration=duration, label=disc.root.name, max_warnings=args.max_warnings)
@@ -556,6 +599,7 @@ def join_parts(parts: list[Path], final_output: Path, args: argparse.Namespace) 
         "-metadata",
         f"title={args.title}",
     ]
+    cmd.extend(split_extra_args(getattr(args, "extra_output_args", "")))
     add_container_options(cmd, args)
     cmd.append(str(final_output))
     stream_ffmpeg(cmd, total_duration=total_duration or None, label="join", max_warnings=args.max_warnings)
@@ -601,12 +645,14 @@ def rewrite_audio(input_file: Path, output_file: Path, args: argparse.Namespace)
         "-af",
         audio_filter(args, input_file),
         "-c:a",
-        "aac",
+        audio_encoder(args),
         "-b:a",
         args.audio_bitrate,
         "-metadata",
         f"title={args.title}",
     ]
+    cmd.extend(split_extra_args(getattr(args, "extra_audio_args", "")))
+    cmd.extend(split_extra_args(getattr(args, "extra_output_args", "")))
     add_container_options(cmd, args)
     cmd.append(str(output_file))
     stream_ffmpeg(cmd, total_duration=duration, label="audio balance/boost", max_warnings=args.max_warnings)
@@ -631,7 +677,7 @@ def ffprobe_summary(path: Path) -> dict:
     return json.loads(proc.stdout)
 
 
-def astats_sample(path: Path, ss: str) -> tuple[float | None, float | None, float | None, float | None]:
+def astats_sample(path: Path, ss: str, duration: int = 60) -> tuple[float | None, float | None, float | None, float | None]:
     proc = run(
         [
             "ffmpeg",
@@ -640,7 +686,7 @@ def astats_sample(path: Path, ss: str) -> tuple[float | None, float | None, floa
             "-ss",
             ss,
             "-t",
-            "60",
+            str(duration),
             "-i",
             str(path),
             "-af",
@@ -681,7 +727,13 @@ def validate_output(
     expected_duration: float | None = None,
     expect_balanced: bool = True,
     expected_video_codecs: set[str] | None = None,
+    expected_audio_codecs: set[str] | None = None,
     min_size_bytes: int = 10 * 1024 * 1024,
+    duration_tolerance_seconds: float = 5.0,
+    duration_tolerance_ratio: float = 0.02,
+    balance_tolerance_db: float = 0.25,
+    clipping_peak_db: float = -0.1,
+    sample_duration: int = 60,
 ) -> None:
     summary = ffprobe_summary(path)
     fmt = summary.get("format", {})
@@ -703,7 +755,7 @@ def validate_output(
         errors.append("output duration is zero or unavailable")
     if expected_duration and duration > 0:
         delta = abs(duration - expected_duration)
-        tolerance = max(5.0, expected_duration * 0.02)
+        tolerance = max(duration_tolerance_seconds, expected_duration * duration_tolerance_ratio)
         if delta > tolerance:
             errors.append(
                 f"duration mismatch: expected {fmt_time(expected_duration)}, got {fmt_time(duration)}"
@@ -722,7 +774,8 @@ def validate_output(
                 f"{stream.get('display_aspect_ratio', '')}"
             )
         if stream.get("codec_type") == "audio":
-            if stream.get("codec_name") != "aac":
+            allowed_audio_codecs = expected_audio_codecs or {"aac"}
+            if stream.get("codec_name") not in allowed_audio_codecs:
                 errors.append(f"unexpected audio codec: {stream.get('codec_name')}")
             if int(stream.get("channels") or 0) != 2:
                 errors.append(f"unexpected audio channel count: {stream.get('channels')}")
@@ -731,7 +784,7 @@ def validate_output(
                 f"{stream.get('channel_layout', '')} {stream.get('bit_rate', '')}bps"
             )
     for ss in samples:
-        lrms, rrms, lpeak, rpeak = astats_sample(path, ss)
+        lrms, rrms, lpeak, rpeak = astats_sample(path, ss, sample_duration)
         if lrms is None or rrms is None:
             errors.append(f"sample {ss}: audio stats unavailable")
             continue
@@ -742,9 +795,9 @@ def validate_output(
             continue
         peak = max(peaks)
         print(f"  sample {ss}: L/R RMS {lrms:.2f}/{rrms:.2f} dB delta {delta:.2f} dB peak {peak:.2f} dB")
-        if expect_balanced and delta > 0.25:
-            errors.append(f"sample {ss}: left/right RMS delta {delta:.2f} dB exceeds 0.25 dB")
-        if peak >= -0.1:
+        if expect_balanced and delta > balance_tolerance_db:
+            errors.append(f"sample {ss}: left/right RMS delta {delta:.2f} dB exceeds {balance_tolerance_db} dB")
+        if peak >= clipping_peak_db:
             errors.append(f"sample {ss}: peak {peak:.2f} dB is too close to clipping")
     if errors:
         raise ValidationError("Validation failed:\n  - " + "\n  - ".join(errors))
@@ -781,7 +834,7 @@ def export(args: argparse.Namespace) -> None:
         print(f"  {i}. {disc.root}  title_set={disc.title_set or 'all'}  VOBs={len(disc.vobs)}  duration={fmt_time(duration)}")
     print(f"Output: {final_output}")
     print(f"Format: {output_format_name(args)}, encoder={selected_encoder(args)}")
-    print(f"Audio: {args.audio_mode}, volume={args.volume}")
+    print(f"Audio: {args.audio_mode}, volume={args.volume}, encoder={audio_encoder(args)}, bitrate={args.audio_bitrate}")
     if args.dry_run:
         print("Dry run only; no files written.")
         return
@@ -805,6 +858,13 @@ def export(args: argparse.Namespace) -> None:
             expected_duration=expected_duration,
             expect_balanced=args.audio_mode == "dual-mono",
             expected_video_codecs=format_preset(output_format_name(args))["expected_video_codecs"],
+            expected_audio_codecs=expected_audio_codec_names(args),
+            min_size_bytes=getattr(args, "min_size_mb", 10) * 1024 * 1024,
+            duration_tolerance_seconds=getattr(args, "duration_tolerance_seconds", 5.0),
+            duration_tolerance_ratio=getattr(args, "duration_tolerance_ratio", 0.02),
+            balance_tolerance_db=getattr(args, "balance_tolerance_db", 0.25),
+            clipping_peak_db=getattr(args, "clipping_peak_db", -0.1),
+            sample_duration=getattr(args, "sample_duration", 60),
         )
     except ValidationError as exc:
         print("Validation failed; keeping derived intermediate files for inspection.", file=sys.stderr)
@@ -849,8 +909,24 @@ def wizard(args: argparse.Namespace) -> None:
     field_order = ask_choice("Field order", ["auto", "bff", "tff"], args.field_order)
     regenerate_timestamps = ask_bool("Regenerate timestamps from probed frame rate", args.regenerate_timestamps)
     video_bitrate = ask_text("Video bitrate", args.video_bitrate)
+    maxrate = ask_text("Video maxrate", args.maxrate)
+    bufsize = ask_text("Video rate-control buffer size", args.bufsize)
+    extra_video_args = ask_text("Extra ffmpeg video/output args before container options", args.extra_video_args, required=False)
+    audio_encoder_value = ask_text("Audio encoder", args.audio_encoder)
     audio_bitrate = ask_text("Audio bitrate", args.audio_bitrate)
-    max_warnings = int(ask_float("Maximum ffmpeg warning/error lines before failing", args.max_warnings, min_value=0, max_value=1000))
+    extra_audio_args = ask_text("Extra ffmpeg audio/output args before container options", args.extra_audio_args, required=False)
+    extra_output_args = ask_text("Extra ffmpeg output/container args before output path", args.extra_output_args, required=False)
+    max_warnings = ask_int("Maximum ffmpeg warning/error lines before failing", args.max_warnings, min_value=0, max_value=1000)
+    stats_period = ask_float("Progress update interval passed to ffmpeg stats_period", args.stats_period, min_value=1, max_value=3600)
+    sample_text = ask_text("Validation sample start times, comma-separated", ",".join(args.samples))
+    samples = [item.strip() for item in sample_text.split(",") if item.strip()]
+    sample_duration = ask_int("Validation sample duration in seconds", args.sample_duration, min_value=1, max_value=600)
+    min_size_mb = ask_int("Minimum acceptable output size in MB", args.min_size_mb, min_value=1, max_value=1024 * 1024)
+    duration_tolerance_seconds = ask_float("Duration tolerance floor in seconds", args.duration_tolerance_seconds, min_value=0, max_value=3600)
+    duration_tolerance_ratio = ask_float("Duration tolerance ratio", args.duration_tolerance_ratio, min_value=0, max_value=1)
+    balance_tolerance_db = ask_float("Dual-mono L/R RMS balance tolerance in dB", args.balance_tolerance_db, min_value=0, max_value=12)
+    clipping_peak_db = ask_float("Maximum allowed peak dBFS before clipping failure", args.clipping_peak_db, min_value=-60, max_value=0)
+    allow_output_inside_source = ask_bool("Allow output inside source tree (dangerous; normally no)", False)
     dry_run = ask_bool("Dry-run only first", True)
     keep_intermediates = ask_bool("Keep derived intermediate part files", False)
     overwrite = ask_bool("Overwrite existing derived output if present", False)
@@ -867,31 +943,56 @@ def wizard(args: argparse.Namespace) -> None:
         field_order=field_order,
         regenerate_timestamps=regenerate_timestamps,
         video_bitrate=video_bitrate,
-        maxrate=args.maxrate,
-        bufsize=args.bufsize,
+        maxrate=maxrate,
+        bufsize=bufsize,
+        extra_video_args=extra_video_args,
         audio_bitrate=audio_bitrate,
+        audio_encoder=audio_encoder_value,
+        extra_audio_args=extra_audio_args,
+        extra_output_args=extra_output_args,
         encoder=encoder,
         max_warnings=max_warnings,
-        stats_period=args.stats_period,
-        samples=args.samples,
+        stats_period=stats_period,
+        samples=samples,
+        sample_duration=sample_duration,
+        min_size_mb=min_size_mb,
+        duration_tolerance_seconds=duration_tolerance_seconds,
+        duration_tolerance_ratio=duration_tolerance_ratio,
+        balance_tolerance_db=balance_tolerance_db,
+        clipping_peak_db=clipping_peak_db,
         dry_run=dry_run,
         overwrite=overwrite,
         keep_intermediates=keep_intermediates,
-        allow_output_inside_source=False,
+        allow_output_inside_source=allow_output_inside_source,
     )
 
     print("\nPlanned export:")
     print(f"  source: {planned.input}")
     print(f"  output dir: {planned.output_dir}")
     print(f"  title: {planned.title}")
-    print(f"  audio: {planned.audio_mode}, volume={planned.volume}, bitrate={planned.audio_bitrate}")
+    print(
+        f"  audio: {planned.audio_mode}, volume={planned.volume}, "
+        f"encoder={planned.audio_encoder}, bitrate={planned.audio_bitrate}"
+    )
     print(f"  title set: {planned.title_set}")
     print(
-        f"  video: format={planned.output_format}, encoder={selected_encoder(planned)}, bitrate={planned.video_bitrate}, "
+        f"  video: format={planned.output_format}, encoder={selected_encoder(planned)}, "
+        f"bitrate={planned.video_bitrate}, maxrate={planned.maxrate}, bufsize={planned.bufsize}, "
         f"deinterlace={planned.deinterlace}, field_order={planned.field_order}, "
         f"regenerate_timestamps={planned.regenerate_timestamps}"
     )
+    print(f"  extra video args: {planned.extra_video_args or '(none)'}")
+    print(f"  extra audio args: {planned.extra_audio_args or '(none)'}")
+    print(f"  extra output args: {planned.extra_output_args or '(none)'}")
+    print(f"  validation samples: {', '.join(planned.samples)} for {planned.sample_duration}s each")
+    print(
+        f"  validation tolerances: min_size={planned.min_size_mb}MB, "
+        f"duration=max({planned.duration_tolerance_seconds}s, {planned.duration_tolerance_ratio:.3f}x), "
+        f"balance={planned.balance_tolerance_db}dB, peak<{planned.clipping_peak_db}dBFS"
+    )
     print(f"  max ffmpeg warning/error lines: {planned.max_warnings}")
+    print(f"  progress stats period: {planned.stats_period}s")
+    print(f"  allow output inside source: {planned.allow_output_inside_source}")
     print(f"  dry-run: {planned.dry_run}")
     print(f"  keep intermediates: {planned.keep_intermediates}")
     print(f"  overwrite: {planned.overwrite}")
@@ -960,11 +1061,21 @@ def build_parser() -> argparse.ArgumentParser:
     wizard_p.add_argument("--video-bitrate", default="4500k")
     wizard_p.add_argument("--maxrate", default="6500k")
     wizard_p.add_argument("--bufsize", default="9000k")
+    wizard_p.add_argument("--extra-video-args", default="")
+    wizard_p.add_argument("--audio-encoder", default="aac")
     wizard_p.add_argument("--audio-bitrate", default="192k")
+    wizard_p.add_argument("--extra-audio-args", default="")
+    wizard_p.add_argument("--extra-output-args", default="")
     wizard_p.add_argument("--encoder", default="auto")
     wizard_p.add_argument("--max-warnings", type=int, default=10)
     wizard_p.add_argument("--stats-period", type=float, default=30)
     wizard_p.add_argument("--samples", nargs="*", default=list(DEFAULT_SAMPLES))
+    wizard_p.add_argument("--sample-duration", type=int, default=60)
+    wizard_p.add_argument("--min-size-mb", type=int, default=10)
+    wizard_p.add_argument("--duration-tolerance-seconds", type=float, default=5.0)
+    wizard_p.add_argument("--duration-tolerance-ratio", type=float, default=0.02)
+    wizard_p.add_argument("--balance-tolerance-db", type=float, default=0.25)
+    wizard_p.add_argument("--clipping-peak-db", type=float, default=-0.1)
     wizard_p.set_defaults(func=wizard)
 
     export_p = sub.add_parser("export", help="Export a DVD folder to a validated MP4 or MKV")
@@ -981,11 +1092,21 @@ def build_parser() -> argparse.ArgumentParser:
     export_p.add_argument("--video-bitrate", default="4500k")
     export_p.add_argument("--maxrate", default="6500k")
     export_p.add_argument("--bufsize", default="9000k")
+    export_p.add_argument("--extra-video-args", default="")
+    export_p.add_argument("--audio-encoder", default="aac")
     export_p.add_argument("--audio-bitrate", default="192k")
+    export_p.add_argument("--extra-audio-args", default="")
+    export_p.add_argument("--extra-output-args", default="")
     export_p.add_argument("--encoder", default="auto")
     export_p.add_argument("--max-warnings", type=int, default=10)
     export_p.add_argument("--stats-period", type=float, default=30)
     export_p.add_argument("--samples", nargs="*", default=list(DEFAULT_SAMPLES))
+    export_p.add_argument("--sample-duration", type=int, default=60)
+    export_p.add_argument("--min-size-mb", type=int, default=10)
+    export_p.add_argument("--duration-tolerance-seconds", type=float, default=5.0)
+    export_p.add_argument("--duration-tolerance-ratio", type=float, default=0.02)
+    export_p.add_argument("--balance-tolerance-db", type=float, default=0.25)
+    export_p.add_argument("--clipping-peak-db", type=float, default=-0.1)
     export_p.add_argument("--dry-run", action="store_true")
     export_p.add_argument("--overwrite", action="store_true")
     export_p.add_argument("--keep-intermediates", action="store_true")

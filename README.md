@@ -12,7 +12,7 @@ Agent skill for converting DVD-Video rips (`VIDEO_TS`, `.VOB`, `.IFO`, `.BUP`) i
 - Converts interview/speech audio to centered dual-mono by default.
 - Applies a modest audio boost by default.
 - Validates duration, streams, selected video codec, size, audio balance, and clipping risk.
-- Includes an interactive wizard that asks for configuration knobs before a real encode.
+- Includes an interactive wizard that asks for configuration knobs before a real encode, including format, codecs, rate control, audio handling, validation thresholds, progress cadence, overwrite behavior, and cleanup.
 
 ## Install
 
@@ -91,7 +91,7 @@ Run the unit tests:
 python3 -m unittest discover -s skills/dvd-video-export/tests -v
 ```
 
-The tests cover DVD discovery, path guardrails, dry-run behavior, title-set selection, ffmpeg warning failure, audio filters, validation failure paths, and cleanup behavior.
+The tests cover DVD discovery, path guardrails, dry-run behavior, title-set selection, format presets, ffmpeg warning failure, audio filters, validation thresholds, validation failure paths, and cleanup behavior.
 
 ## License
 

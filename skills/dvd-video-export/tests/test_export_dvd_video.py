@@ -161,6 +161,12 @@ class DVDVideoExportTests(unittest.TestCase):
         dvd.add_container_options(mkv_cmd, h264_mkv)
         self.assertEqual(mkv_cmd, [])
 
+    def test_extra_ffmpeg_args_are_shell_parsed(self):
+        self.assertEqual(
+            dvd.split_extra_args("-preset slow -metadata comment='speech archive'"),
+            ["-preset", "slow", "-metadata", "comment=speech archive"],
+        )
+
     def test_video_filter_uses_probed_frame_rate_and_field_order(self):
         args = argparse.Namespace(deinterlace="auto", field_order="auto", regenerate_timestamps=True)
         disc = dvd.Disc(root=Path("/tmp/dvd"), video_ts=Path("/tmp/dvd/VIDEO_TS"), vobs=[Path("/tmp/dvd/VIDEO_TS/VTS_01_1.VOB")])
@@ -257,6 +263,34 @@ class DVDVideoExportTests(unittest.TestCase):
                         expected_duration=100,
                         expect_balanced=True,
                         expected_video_codecs={"h264"},
+                    )
+
+    def test_validate_output_honors_custom_tolerances(self):
+        summary = {
+            "format": {"duration": "91", "size": str(5 * 1024 * 1024)},
+            "streams": [
+                {"codec_type": "video", "codec_name": "hevc", "width": 720, "height": 576},
+                {"codec_type": "audio", "codec_name": "aac", "channels": 2},
+            ],
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "out.mp4"
+            touch(output)
+            with mock.patch.object(dvd, "ffprobe_summary", return_value=summary), mock.patch.object(
+                dvd, "astats_sample", return_value=(-20.0, -20.4, -1.0, -1.0)
+            ):
+                with redirect_stdout(io.StringIO()):
+                    dvd.validate_output(
+                        output,
+                        ("00:00:00",),
+                        expected_duration=100,
+                        expect_balanced=True,
+                        min_size_bytes=1024,
+                        duration_tolerance_seconds=10,
+                        duration_tolerance_ratio=0,
+                        balance_tolerance_db=0.5,
+                        clipping_peak_db=-0.5,
+                        sample_duration=15,
                     )
 
     def test_export_dry_run_writes_no_files_and_discovers_plan(self):

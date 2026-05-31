@@ -31,13 +31,16 @@ python3 ~/.codex/skills/dvd-video-export/scripts/export_dvd_video.py scan /path/
 - audio mode (`dual-mono` recommended for interviews);
 - volume boost (`1.18` recommended unless the user asks otherwise);
 - output format preset (`hevc-mp4` recommended by default; also offer `h264-mp4`, `hevc-mkv`, `h264-mkv`);
-- video encoder/quality (`auto`, `hevc_videotoolbox`, `h264_videotoolbox`, `libx265`, `libx264`; `4500k` default for old DVD sources);
+- video encoder, bitrate, maxrate, buffer size, and optional extra ffmpeg video/output args;
+- audio mode, volume, encoder, bitrate, and optional extra ffmpeg audio args;
 - DVD title set (`auto` chooses the largest title set; specify `VTS_01`, `VTS_02`, etc. when needed);
 - deinterlace mode, field order, and timestamp regeneration;
-- maximum tolerated ffmpeg warning/error lines;
+- validation sample times, sample duration, minimum output size, duration tolerance, dual-mono balance tolerance, and clipping threshold;
+- progress update interval and maximum tolerated ffmpeg warning/error lines;
 - whether to dry-run first;
 - whether to keep or clean derived intermediates;
-- overwrite behavior.
+- overwrite behavior;
+- whether to allow output inside the source tree, which should normally remain `no`.
 
 Use the interactive wizard when the user wants the script to ask:
 
@@ -85,18 +88,19 @@ The bundled script:
 - copies video during audio-only rework when possible;
 - converts audio to centered dual-mono with channel-aware filters: duplicate mono, average stereo, and use center-weighted mixing for multi-channel audio;
 - boosts audio with `volume=<boost>` after dual-mono;
+- lets the user tune output format, video encoder, video rate control, audio encoder, audio bitrate, ffmpeg extra args, progress cadence, validation samples, validation thresholds, dry-run, overwrite, and intermediate cleanup from the wizard;
 - refuses to write output inside the source tree or discovered DVD root unless `--allow-output-inside-source` is explicitly supplied;
 - refuses to overwrite output unless `--overwrite` is supplied;
 - fails when ffmpeg warning/error lines exceed `--max-warnings`;
 - reports progress from ffmpeg `time=`, `speed=`, output size, percent, elapsed, and ETA;
 - hard-fails validation on missing/wrong streams, duration mismatch, tiny output size, unavailable audio stats, imbalanced dual-mono samples, or near-clipping peaks.
 
-Default settings are `--output-format hevc-mp4`, `--audio-mode dual-mono`, `--volume 1.18`, `--title-set auto`, `--deinterlace auto`, `--regenerate-timestamps`, `--video-bitrate 4500k`, `--audio-bitrate 192k`, `--encoder auto`, and `--max-warnings 10`.
+Default settings are `--output-format hevc-mp4`, `--audio-mode dual-mono`, `--volume 1.18`, `--title-set auto`, `--deinterlace auto`, `--regenerate-timestamps`, `--video-bitrate 4500k`, `--maxrate 6500k`, `--bufsize 9000k`, `--audio-encoder aac`, `--audio-bitrate 192k`, `--encoder auto`, `--samples 00:05:00 01:30:00 03:00:00`, `--sample-duration 60`, `--min-size-mb 10`, `--duration-tolerance-seconds 5`, `--duration-tolerance-ratio 0.02`, `--balance-tolerance-db 0.25`, `--clipping-peak-db -0.1`, `--stats-period 30`, and `--max-warnings 10`.
 
 ## Guardrails
 
 - Do not use shell loops that split on spaces for DVD paths. Use null-safe `find -print0`, Python `Path`, or the bundled script.
-- Do not concatenate multiple discs with the concat demuxer in one pass when DVD timestamps look suspicious. Encode per disc, then join derived MP4 parts.
+- Do not concatenate multiple discs with the concat demuxer in one pass when DVD timestamps look suspicious. Encode per disc, then join derived parts.
 - Do not delete intermediate files until the final output is validated and the user confirms cleanup, unless the script is cleaning its own failed partial output in the export folder.
 - If ffmpeg reports warning/error lines beyond the configured threshold, stop and inspect with a short probe. Try per-disc byte-concat before using a global VOB list.
 - If duration is unexpectedly short, stop and re-plan. DVD metadata and timestamps can mislead ffmpeg.
