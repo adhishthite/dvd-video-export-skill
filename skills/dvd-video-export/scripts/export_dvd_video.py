@@ -10,7 +10,6 @@ from __future__ import annotations
 import argparse
 import json
 import math
-import os
 import re
 import shlex
 import shutil
@@ -77,7 +76,9 @@ def fail(message: str, code: int = 2) -> None:
     raise SystemExit(code)
 
 
-def run(cmd: list[str], *, capture: bool = False, check: bool = True) -> subprocess.CompletedProcess[str]:
+def run(
+    cmd: list[str], *, capture: bool = False, check: bool = True
+) -> subprocess.CompletedProcess[str]:
     try:
         return subprocess.run(
             cmd,
@@ -119,7 +120,9 @@ def reject_unsafe_path(path: Path) -> None:
     if "\n" in text or "\r" in text:
         fail(f"refusing path with newline characters: {path}")
     if "|" in text:
-        fail(f"refusing path with '|' because ffmpeg concat protocol cannot represent it safely: {path}")
+        fail(
+            f"refusing path with '|' because ffmpeg concat protocol cannot represent it safely: {path}"
+        )
 
 
 def ffconcat_quote(path: Path) -> str:
@@ -148,13 +151,19 @@ def title_set_vobs(video_ts: Path) -> dict[str, list[Path]]:
         match = re.match(r"(VTS_\d+)_([1-9]\d*)\.VOB$", path.name, re.I)
         if match:
             groups.setdefault(match.group(1).upper(), []).append(path)
-    return {key: sorted(paths, key=natural_key) for key, paths in sorted(groups.items())}
+    return {
+        key: sorted(paths, key=natural_key) for key, paths in sorted(groups.items())
+    }
 
 
 def main_vobs(video_ts: Path) -> list[Path]:
     groups = title_set_vobs(video_ts)
     if groups:
-        return sorted(groups.values(), key=lambda paths: sum(p.stat().st_size for p in paths), reverse=True)[0]
+        return sorted(
+            groups.values(),
+            key=lambda paths: sum(p.stat().st_size for p in paths),
+            reverse=True,
+        )[0]
     vobs = [p for p in video_ts.iterdir() if p.is_file() and p.suffix.lower() == ".vob"]
     return sorted(vobs, key=natural_key)
 
@@ -175,7 +184,9 @@ def discover_discs(input_path: Path, title_set: str = "auto") -> list[Disc]:
             else:
                 selected = normalized
                 if selected not in groups:
-                    fail(f"title set {title_set} not found in {video_ts}; available: {', '.join(groups)}")
+                    fail(
+                        f"title set {title_set} not found in {video_ts}; available: {', '.join(groups)}"
+                    )
                 vobs = groups[selected]
         else:
             selected = ""
@@ -184,7 +195,9 @@ def discover_discs(input_path: Path, title_set: str = "auto") -> list[Disc]:
             continue
         for path in vobs:
             reject_unsafe_path(path)
-        discs.append(Disc(root=video_ts.parent, video_ts=video_ts, vobs=vobs, title_set=selected))
+        discs.append(
+            Disc(root=video_ts.parent, video_ts=video_ts, vobs=vobs, title_set=selected)
+        )
     return discs
 
 
@@ -288,11 +301,16 @@ def concat_url(files: list[Path]) -> str:
 
 def video_filter_for_disc(disc: Disc, args: argparse.Namespace) -> str:
     info = ffprobe_video_info(concat_url(disc.vobs))
-    fps = parse_rate(info.get("avg_frame_rate")) or parse_rate(info.get("r_frame_rate")) or 25.0
+    fps = (
+        parse_rate(info.get("avg_frame_rate"))
+        or parse_rate(info.get("r_frame_rate"))
+        or 25.0
+    )
     field_order = (info.get("field_order") or "unknown").lower()
     filters: list[str] = []
     should_deinterlace = args.deinterlace == "always" or (
-        args.deinterlace == "auto" and field_order not in {"progressive", "unknown", "undetermined"}
+        args.deinterlace == "auto"
+        and field_order not in {"progressive", "unknown", "undetermined"}
     )
     if should_deinterlace:
         parity = args.field_order
@@ -312,7 +330,9 @@ def format_preset(name: str) -> dict:
     try:
         return FORMAT_PRESETS[name]
     except KeyError:
-        fail(f"unknown output format: {name}; choose one of {', '.join(FORMAT_PRESETS)}")
+        fail(
+            f"unknown output format: {name}; choose one of {', '.join(FORMAT_PRESETS)}"
+        )
 
 
 def selected_encoder(args: argparse.Namespace) -> str:
@@ -381,14 +401,25 @@ def scan(args: argparse.Namespace) -> None:
             ]
             size = sum(p.stat().st_size for p in disc.root.rglob("*") if p.is_file())
             duration = ffprobe_duration(concat_url(disc.vobs))
-            rows.append((disc.root, disc.title_set or "all", size, len(dvd_files), len(disc.vobs), duration))
+            rows.append(
+                (
+                    disc.root,
+                    disc.title_set or "all",
+                    size,
+                    len(dvd_files),
+                    len(disc.vobs),
+                    duration,
+                )
+            )
     if not rows:
         print("No VIDEO_TS DVD exports found.")
         return
     for root, title_set, size, dvd_count, vob_count, duration in rows:
         size_gb = size / (1024**3)
         duration_text = fmt_time(duration) if duration else "unknown"
-        print(f"{size_gb:5.1f}G  {duration_text:>10}  {title_set:>6}  {dvd_count:2d} DVD files  {vob_count:2d} VOBs  {root}")
+        print(
+            f"{size_gb:5.1f}G  {duration_text:>10}  {title_set:>6}  {dvd_count:2d} DVD files  {vob_count:2d} VOBs  {root}"
+        )
 
 
 def fmt_time(seconds: float | None) -> str:
@@ -434,7 +465,9 @@ def ask_choice(prompt: str, choices: list[str], default: str) -> str:
         print(f"Choose one of: {', '.join(choices)}")
 
 
-def ask_float(prompt: str, default: float, *, min_value: float, max_value: float) -> float:
+def ask_float(
+    prompt: str, default: float, *, min_value: float, max_value: float
+) -> float:
     while True:
         raw = ask_text(prompt, str(default))
         try:
@@ -484,17 +517,26 @@ def parse_speed(value: str) -> str | None:
     return match.group(1) if match else None
 
 
-def stream_ffmpeg(cmd: list[str], *, total_duration: float | None, label: str, max_warnings: int = 0) -> None:
+def stream_ffmpeg(
+    cmd: list[str], *, total_duration: float | None, label: str, max_warnings: int = 0
+) -> None:
     print(f"Starting: {label}")
     start = time.monotonic()
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    proc = subprocess.Popen(
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
+    )
     assert proc.stdout is not None
     last_progress = 0.0
     warnings = 0
     for line in proc.stdout:
         text = line.rstrip()
         lower = text.lower()
-        if "error" in lower or "invalid" in lower or "discontinuity" in lower or "non-monotonic" in lower:
+        if (
+            "error" in lower
+            or "invalid" in lower
+            or "discontinuity" in lower
+            or "non-monotonic" in lower
+        ):
             warnings += 1
             print(text)
         current = parse_time(text)
@@ -509,28 +551,45 @@ def stream_ffmpeg(cmd: list[str], *, total_duration: float | None, label: str, m
         if total_duration and current > 0:
             pct = min(100.0, current / total_duration * 100)
             eta = elapsed * (total_duration / current - 1)
-            print(f"{label}: {pct:5.1f}%  {fmt_time(current)} / {fmt_time(total_duration)}  speed {speed}  ETA {fmt_time(eta)}")
+            print(
+                f"{label}: {pct:5.1f}%  {fmt_time(current)} / {fmt_time(total_duration)}  speed {speed}  ETA {fmt_time(eta)}"
+            )
         else:
             print(f"{label}: {fmt_time(current)} processed  speed {speed}")
     code = proc.wait()
     if code != 0:
         fail(f"ffmpeg failed for {label} with exit code {code}")
     if warnings > max_warnings:
-        fail(f"ffmpeg reported {warnings} warning/error lines for {label}; maximum allowed is {max_warnings}")
+        fail(
+            f"ffmpeg reported {warnings} warning/error lines for {label}; maximum allowed is {max_warnings}"
+        )
     if warnings:
-        print(f"Warning: {warnings} ffmpeg warning/error lines were observed for {label}.")
+        print(
+            f"Warning: {warnings} ffmpeg warning/error lines were observed for {label}."
+        )
 
 
-def validate_paths(input_path: Path, output_dir: Path, allow_inside: bool, *, create_output: bool, discs: list[Disc] | None = None) -> None:
+def validate_paths(
+    input_path: Path,
+    output_dir: Path,
+    allow_inside: bool,
+    *,
+    create_output: bool,
+    discs: list[Disc] | None = None,
+) -> None:
     if not input_path.exists():
         fail(f"input path does not exist: {input_path}")
     if is_relative_to(output_dir, input_path) and not allow_inside:
-        fail("refusing to write output inside the source tree; choose a separate output directory")
+        fail(
+            "refusing to write output inside the source tree; choose a separate output directory"
+        )
     for disc in discs or []:
         if is_relative_to(output_dir, disc.root) and not allow_inside:
             fail(f"refusing to write output inside DVD source folder: {disc.root}")
         if is_relative_to(output_dir, disc.video_ts) and not allow_inside:
-            fail(f"refusing to write output inside VIDEO_TS source folder: {disc.video_ts}")
+            fail(
+                f"refusing to write output inside VIDEO_TS source folder: {disc.video_ts}"
+            )
     if create_output:
         output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -574,12 +633,19 @@ def encode_disc(disc: Disc, output: Path, args: argparse.Namespace) -> None:
     cmd.extend(split_extra_args(getattr(args, "extra_output_args", "")))
     add_container_options(cmd, args)
     cmd.append(str(output))
-    stream_ffmpeg(cmd, total_duration=duration, label=disc.root.name, max_warnings=args.max_warnings)
+    stream_ffmpeg(
+        cmd,
+        total_duration=duration,
+        label=disc.root.name,
+        max_warnings=args.max_warnings,
+    )
 
 
 def join_parts(parts: list[Path], final_output: Path, args: argparse.Namespace) -> None:
     list_path = final_output.with_suffix(".parts.txt")
-    list_path.write_text("".join(f"file {ffconcat_quote(p)}\n" for p in parts), encoding="utf-8")
+    list_path.write_text(
+        "".join(f"file {ffconcat_quote(p)}\n" for p in parts), encoding="utf-8"
+    )
     total_duration = sum((ffprobe_duration(str(p)) or 0) for p in parts)
     cmd = [
         "ffmpeg",
@@ -602,7 +668,12 @@ def join_parts(parts: list[Path], final_output: Path, args: argparse.Namespace) 
     cmd.extend(split_extra_args(getattr(args, "extra_output_args", "")))
     add_container_options(cmd, args)
     cmd.append(str(final_output))
-    stream_ffmpeg(cmd, total_duration=total_duration or None, label="join", max_warnings=args.max_warnings)
+    stream_ffmpeg(
+        cmd,
+        total_duration=total_duration or None,
+        label="join",
+        max_warnings=args.max_warnings,
+    )
 
 
 def audio_filter(args: argparse.Namespace, input_file: Path | None = None) -> str:
@@ -619,13 +690,17 @@ def audio_filter(args: argparse.Namespace, input_file: Path | None = None) -> st
         elif channels == 2:
             filters.append("pan=stereo|c0=0.5*c0+0.5*c1|c1=0.5*c0+0.5*c1")
         else:
-            filters.append("pan=stereo|c0=0.25*c0+0.25*c1+0.5*c2|c1=0.25*c0+0.25*c1+0.5*c2")
+            filters.append(
+                "pan=stereo|c0=0.25*c0+0.25*c1+0.5*c2|c1=0.25*c0+0.25*c1+0.5*c2"
+            )
     if args.volume != 1.0:
         filters.append(f"volume={args.volume}")
     return ",".join(filters) or "anull"
 
 
-def rewrite_audio(input_file: Path, output_file: Path, args: argparse.Namespace) -> None:
+def rewrite_audio(
+    input_file: Path, output_file: Path, args: argparse.Namespace
+) -> None:
     duration = ffprobe_duration(str(input_file))
     cmd = [
         "ffmpeg",
@@ -655,7 +730,12 @@ def rewrite_audio(input_file: Path, output_file: Path, args: argparse.Namespace)
     cmd.extend(split_extra_args(getattr(args, "extra_output_args", "")))
     add_container_options(cmd, args)
     cmd.append(str(output_file))
-    stream_ffmpeg(cmd, total_duration=duration, label="audio balance/boost", max_warnings=args.max_warnings)
+    stream_ffmpeg(
+        cmd,
+        total_duration=duration,
+        label="audio balance/boost",
+        max_warnings=args.max_warnings,
+    )
 
 
 def ffprobe_summary(path: Path) -> dict:
@@ -677,7 +757,9 @@ def ffprobe_summary(path: Path) -> dict:
     return json.loads(proc.stdout)
 
 
-def astats_sample(path: Path, ss: str, duration: int = 60) -> tuple[float | None, float | None, float | None, float | None]:
+def astats_sample(
+    path: Path, ss: str, duration: int = 60
+) -> tuple[float | None, float | None, float | None, float | None]:
     proc = run(
         [
             "ffmpeg",
@@ -755,7 +837,9 @@ def validate_output(
         errors.append("output duration is zero or unavailable")
     if expected_duration and duration > 0:
         delta = abs(duration - expected_duration)
-        tolerance = max(duration_tolerance_seconds, expected_duration * duration_tolerance_ratio)
+        tolerance = max(
+            duration_tolerance_seconds, expected_duration * duration_tolerance_ratio
+        )
         if delta > tolerance:
             errors.append(
                 f"duration mismatch: expected {fmt_time(expected_duration)}, got {fmt_time(duration)}"
@@ -778,7 +862,9 @@ def validate_output(
             if stream.get("codec_name") not in allowed_audio_codecs:
                 errors.append(f"unexpected audio codec: {stream.get('codec_name')}")
             if int(stream.get("channels") or 0) != 2:
-                errors.append(f"unexpected audio channel count: {stream.get('channels')}")
+                errors.append(
+                    f"unexpected audio channel count: {stream.get('channels')}"
+                )
             print(
                 f"  audio: {stream.get('codec_name')} {stream.get('channels')}ch "
                 f"{stream.get('channel_layout', '')} {stream.get('bit_rate', '')}bps"
@@ -794,9 +880,13 @@ def validate_output(
             errors.append(f"sample {ss}: peak stats unavailable")
             continue
         peak = max(peaks)
-        print(f"  sample {ss}: L/R RMS {lrms:.2f}/{rrms:.2f} dB delta {delta:.2f} dB peak {peak:.2f} dB")
+        print(
+            f"  sample {ss}: L/R RMS {lrms:.2f}/{rrms:.2f} dB delta {delta:.2f} dB peak {peak:.2f} dB"
+        )
         if expect_balanced and delta > balance_tolerance_db:
-            errors.append(f"sample {ss}: left/right RMS delta {delta:.2f} dB exceeds {balance_tolerance_db} dB")
+            errors.append(
+                f"sample {ss}: left/right RMS delta {delta:.2f} dB exceeds {balance_tolerance_db} dB"
+            )
         if peak >= clipping_peak_db:
             errors.append(f"sample {ss}: peak {peak:.2f} dB is too close to clipping")
     if errors:
@@ -822,19 +912,32 @@ def export(args: argparse.Namespace) -> None:
     title = safe_title(args.title or input_path.name)
     args.title = title
     audio_label = "Dual Mono" if args.audio_mode == "dual-mono" else "Stereo"
-    boost_label = f" +{int(round((args.volume - 1) * 100))}pct Audio" if args.volume != 1.0 else ""
+    boost_label = (
+        f" +{int(round((args.volume - 1) * 100))}pct Audio"
+        if args.volume != 1.0
+        else ""
+    )
     format_preset(output_format_name(args))
-    final_output = output_dir / f"{title} {video_codec_label(args)} {audio_label}{boost_label}{output_extension(args)}"
+    final_output = (
+        output_dir
+        / f"{title} {video_codec_label(args)} {audio_label}{boost_label}{output_extension(args)}"
+    )
     if final_output.exists() and not args.overwrite:
-        fail(f"output already exists: {final_output}; pass --overwrite or choose another title")
+        fail(
+            f"output already exists: {final_output}; pass --overwrite or choose another title"
+        )
     print(f"Input: {input_path}")
     print(f"Discs/parts: {len(discs)}")
     for i, disc in enumerate(discs, 1):
         duration = ffprobe_duration(concat_url(disc.vobs))
-        print(f"  {i}. {disc.root}  title_set={disc.title_set or 'all'}  VOBs={len(disc.vobs)}  duration={fmt_time(duration)}")
+        print(
+            f"  {i}. {disc.root}  title_set={disc.title_set or 'all'}  VOBs={len(disc.vobs)}  duration={fmt_time(duration)}"
+        )
     print(f"Output: {final_output}")
     print(f"Format: {output_format_name(args)}, encoder={selected_encoder(args)}")
-    print(f"Audio: {args.audio_mode}, volume={args.volume}, encoder={audio_encoder(args)}, bitrate={args.audio_bitrate}")
+    print(
+        f"Audio: {args.audio_mode}, volume={args.volume}, encoder={audio_encoder(args)}, bitrate={args.audio_bitrate}"
+    )
     if args.dry_run:
         print("Dry run only; no files written.")
         return
@@ -850,14 +953,18 @@ def export(args: argparse.Namespace) -> None:
         joined.unlink()
     join_parts(parts, joined, args)
     rewrite_audio(joined, final_output, args)
-    expected_duration = sum((ffprobe_duration(str(part)) or 0) for part in parts) or None
+    expected_duration = (
+        sum((ffprobe_duration(str(part)) or 0) for part in parts) or None
+    )
     try:
         validate_output(
             final_output,
             tuple(args.samples),
             expected_duration=expected_duration,
             expect_balanced=args.audio_mode == "dual-mono",
-            expected_video_codecs=format_preset(output_format_name(args))["expected_video_codecs"],
+            expected_video_codecs=format_preset(output_format_name(args))[
+                "expected_video_codecs"
+            ],
             expected_audio_codecs=expected_audio_codec_names(args),
             min_size_bytes=getattr(args, "min_size_mb", 10) * 1024 * 1024,
             duration_tolerance_seconds=getattr(args, "duration_tolerance_seconds", 5.0),
@@ -867,7 +974,10 @@ def export(args: argparse.Namespace) -> None:
             sample_duration=getattr(args, "sample_duration", 60),
         )
     except ValidationError as exc:
-        print("Validation failed; keeping derived intermediate files for inspection.", file=sys.stderr)
+        print(
+            "Validation failed; keeping derived intermediate files for inspection.",
+            file=sys.stderr,
+        )
         fail(str(exc))
     if args.keep_intermediates:
         print("Keeping derived intermediate files in output directory.")
@@ -882,8 +992,12 @@ def export(args: argparse.Namespace) -> None:
 def wizard(args: argparse.Namespace) -> None:
     require_tools()
     print("DVD Video Export wizard")
-    print("Rule: source DVD/backup files are read-only; output must be a separate derived export folder.")
-    input_value = args.input or ask_text("Source DVD folder or parent folder containing VIDEO_TS")
+    print(
+        "Rule: source DVD/backup files are read-only; output must be a separate derived export folder."
+    )
+    input_value = args.input or ask_text(
+        "Source DVD folder or parent folder containing VIDEO_TS"
+    )
     input_path = resolved(Path(input_value))
     if not input_path.exists():
         fail(f"input path does not exist: {input_path}")
@@ -894,39 +1008,112 @@ def wizard(args: argparse.Namespace) -> None:
     print(f"Found {len(discs)} disc/part(s):")
     for i, disc in enumerate(discs, 1):
         duration = ffprobe_duration(concat_url(disc.vobs))
-        print(f"  {i}. {disc.root}  title_set={disc.title_set or 'all'}  VOBs={len(disc.vobs)}  duration={fmt_time(duration)}")
+        print(
+            f"  {i}. {disc.root}  title_set={disc.title_set or 'all'}  VOBs={len(disc.vobs)}  duration={fmt_time(duration)}"
+        )
 
     default_title = safe_title(args.title or input_path.name)
-    default_output = str(Path.home() / "Desktop" / f"{default_title} {video_codec_label(args)}")
-    output_dir = ask_text("Output folder for derived files", args.output_dir or default_output)
+    default_output = str(
+        Path.home() / "Desktop" / f"{default_title} {video_codec_label(args)}"
+    )
+    output_dir = ask_text(
+        "Output folder for derived files", args.output_dir or default_output
+    )
     title = ask_text("Output title", default_title)
-    output_format = ask_choice("Output format", list(FORMAT_PRESETS), args.output_format)
+    output_format = ask_choice(
+        "Output format", list(FORMAT_PRESETS), args.output_format
+    )
     audio_mode = ask_choice("Audio mode", ["dual-mono", "preserve"], args.audio_mode)
-    volume = ask_float("Audio volume multiplier", args.volume, min_value=0.5, max_value=2.0)
-    encoder = ask_text("Video encoder (auto, hevc_videotoolbox, h264_videotoolbox, libx265, libx264)", args.encoder)
+    volume = ask_float(
+        "Audio volume multiplier", args.volume, min_value=0.5, max_value=2.0
+    )
+    encoder = ask_text(
+        "Video encoder (auto, hevc_videotoolbox, h264_videotoolbox, libx265, libx264)",
+        args.encoder,
+    )
     title_set = ask_text("DVD title set to export", args.title_set)
-    deinterlace = ask_choice("Deinterlace", ["auto", "always", "never"], args.deinterlace)
+    deinterlace = ask_choice(
+        "Deinterlace", ["auto", "always", "never"], args.deinterlace
+    )
     field_order = ask_choice("Field order", ["auto", "bff", "tff"], args.field_order)
-    regenerate_timestamps = ask_bool("Regenerate timestamps from probed frame rate", args.regenerate_timestamps)
+    regenerate_timestamps = ask_bool(
+        "Regenerate timestamps from probed frame rate", args.regenerate_timestamps
+    )
     video_bitrate = ask_text("Video bitrate", args.video_bitrate)
     maxrate = ask_text("Video maxrate", args.maxrate)
     bufsize = ask_text("Video rate-control buffer size", args.bufsize)
-    extra_video_args = ask_text("Extra ffmpeg video/output args before container options", args.extra_video_args, required=False)
+    extra_video_args = ask_text(
+        "Extra ffmpeg video/output args before container options",
+        args.extra_video_args,
+        required=False,
+    )
     audio_encoder_value = ask_text("Audio encoder", args.audio_encoder)
     audio_bitrate = ask_text("Audio bitrate", args.audio_bitrate)
-    extra_audio_args = ask_text("Extra ffmpeg audio/output args before container options", args.extra_audio_args, required=False)
-    extra_output_args = ask_text("Extra ffmpeg output/container args before output path", args.extra_output_args, required=False)
-    max_warnings = ask_int("Maximum ffmpeg warning/error lines before failing", args.max_warnings, min_value=0, max_value=1000)
-    stats_period = ask_float("Progress update interval passed to ffmpeg stats_period", args.stats_period, min_value=1, max_value=3600)
-    sample_text = ask_text("Validation sample start times, comma-separated", ",".join(args.samples))
+    extra_audio_args = ask_text(
+        "Extra ffmpeg audio/output args before container options",
+        args.extra_audio_args,
+        required=False,
+    )
+    extra_output_args = ask_text(
+        "Extra ffmpeg output/container args before output path",
+        args.extra_output_args,
+        required=False,
+    )
+    max_warnings = ask_int(
+        "Maximum ffmpeg warning/error lines before failing",
+        args.max_warnings,
+        min_value=0,
+        max_value=1000,
+    )
+    stats_period = ask_float(
+        "Progress update interval passed to ffmpeg stats_period",
+        args.stats_period,
+        min_value=1,
+        max_value=3600,
+    )
+    sample_text = ask_text(
+        "Validation sample start times, comma-separated", ",".join(args.samples)
+    )
     samples = [item.strip() for item in sample_text.split(",") if item.strip()]
-    sample_duration = ask_int("Validation sample duration in seconds", args.sample_duration, min_value=1, max_value=600)
-    min_size_mb = ask_int("Minimum acceptable output size in MB", args.min_size_mb, min_value=1, max_value=1024 * 1024)
-    duration_tolerance_seconds = ask_float("Duration tolerance floor in seconds", args.duration_tolerance_seconds, min_value=0, max_value=3600)
-    duration_tolerance_ratio = ask_float("Duration tolerance ratio", args.duration_tolerance_ratio, min_value=0, max_value=1)
-    balance_tolerance_db = ask_float("Dual-mono L/R RMS balance tolerance in dB", args.balance_tolerance_db, min_value=0, max_value=12)
-    clipping_peak_db = ask_float("Maximum allowed peak dBFS before clipping failure", args.clipping_peak_db, min_value=-60, max_value=0)
-    allow_output_inside_source = ask_bool("Allow output inside source tree (dangerous; normally no)", False)
+    sample_duration = ask_int(
+        "Validation sample duration in seconds",
+        args.sample_duration,
+        min_value=1,
+        max_value=600,
+    )
+    min_size_mb = ask_int(
+        "Minimum acceptable output size in MB",
+        args.min_size_mb,
+        min_value=1,
+        max_value=1024 * 1024,
+    )
+    duration_tolerance_seconds = ask_float(
+        "Duration tolerance floor in seconds",
+        args.duration_tolerance_seconds,
+        min_value=0,
+        max_value=3600,
+    )
+    duration_tolerance_ratio = ask_float(
+        "Duration tolerance ratio",
+        args.duration_tolerance_ratio,
+        min_value=0,
+        max_value=1,
+    )
+    balance_tolerance_db = ask_float(
+        "Dual-mono L/R RMS balance tolerance in dB",
+        args.balance_tolerance_db,
+        min_value=0,
+        max_value=12,
+    )
+    clipping_peak_db = ask_float(
+        "Maximum allowed peak dBFS before clipping failure",
+        args.clipping_peak_db,
+        min_value=-60,
+        max_value=0,
+    )
+    allow_output_inside_source = ask_bool(
+        "Allow output inside source tree (dangerous; normally no)", False
+    )
     dry_run = ask_bool("Dry-run only first", True)
     keep_intermediates = ask_bool("Keep derived intermediate part files", False)
     overwrite = ask_bool("Overwrite existing derived output if present", False)
@@ -984,7 +1171,9 @@ def wizard(args: argparse.Namespace) -> None:
     print(f"  extra video args: {planned.extra_video_args or '(none)'}")
     print(f"  extra audio args: {planned.extra_audio_args or '(none)'}")
     print(f"  extra output args: {planned.extra_output_args or '(none)'}")
-    print(f"  validation samples: {', '.join(planned.samples)} for {planned.sample_duration}s each")
+    print(
+        f"  validation samples: {', '.join(planned.samples)} for {planned.sample_duration}s each"
+    )
     print(
         f"  validation tolerances: min_size={planned.min_size_mb}MB, "
         f"duration=max({planned.duration_tolerance_seconds}s, {planned.duration_tolerance_ratio:.3f}x), "
@@ -1039,25 +1228,43 @@ def clean(args: argparse.Namespace) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Safely scan and export DVD-Video rips.")
+    parser = argparse.ArgumentParser(
+        description="Safely scan and export DVD-Video rips."
+    )
     sub = parser.add_subparsers(dest="command", required=True)
 
     scan_p = sub.add_parser("scan", help="Scan paths for VIDEO_TS DVD exports")
     scan_p.add_argument("paths", nargs="+")
-    scan_p.add_argument("--title-set", default="auto", help="DVD title set to inspect, e.g. VTS_01, or auto for the largest set")
+    scan_p.add_argument(
+        "--title-set",
+        default="auto",
+        help="DVD title set to inspect, e.g. VTS_01, or auto for the largest set",
+    )
     scan_p.set_defaults(func=scan)
 
-    wizard_p = sub.add_parser("wizard", help="Ask for export configuration interactively")
+    wizard_p = sub.add_parser(
+        "wizard", help="Ask for export configuration interactively"
+    )
     wizard_p.add_argument("input", nargs="?")
     wizard_p.add_argument("--output-dir")
     wizard_p.add_argument("--title")
-    wizard_p.add_argument("--output-format", choices=list(FORMAT_PRESETS), default="hevc-mp4")
-    wizard_p.add_argument("--audio-mode", choices=["dual-mono", "preserve"], default="dual-mono")
+    wizard_p.add_argument(
+        "--output-format", choices=list(FORMAT_PRESETS), default="hevc-mp4"
+    )
+    wizard_p.add_argument(
+        "--audio-mode", choices=["dual-mono", "preserve"], default="dual-mono"
+    )
     wizard_p.add_argument("--volume", type=float, default=1.18)
     wizard_p.add_argument("--title-set", default="auto")
-    wizard_p.add_argument("--deinterlace", choices=["auto", "always", "never"], default="auto")
-    wizard_p.add_argument("--field-order", choices=["auto", "bff", "tff"], default="auto")
-    wizard_p.add_argument("--regenerate-timestamps", action=argparse.BooleanOptionalAction, default=True)
+    wizard_p.add_argument(
+        "--deinterlace", choices=["auto", "always", "never"], default="auto"
+    )
+    wizard_p.add_argument(
+        "--field-order", choices=["auto", "bff", "tff"], default="auto"
+    )
+    wizard_p.add_argument(
+        "--regenerate-timestamps", action=argparse.BooleanOptionalAction, default=True
+    )
     wizard_p.add_argument("--video-bitrate", default="4500k")
     wizard_p.add_argument("--maxrate", default="6500k")
     wizard_p.add_argument("--bufsize", default="9000k")
@@ -1078,17 +1285,29 @@ def build_parser() -> argparse.ArgumentParser:
     wizard_p.add_argument("--clipping-peak-db", type=float, default=-0.1)
     wizard_p.set_defaults(func=wizard)
 
-    export_p = sub.add_parser("export", help="Export a DVD folder to a validated MP4 or MKV")
+    export_p = sub.add_parser(
+        "export", help="Export a DVD folder to a validated MP4 or MKV"
+    )
     export_p.add_argument("input")
     export_p.add_argument("--output-dir", required=True)
     export_p.add_argument("--title")
-    export_p.add_argument("--output-format", choices=list(FORMAT_PRESETS), default="hevc-mp4")
-    export_p.add_argument("--audio-mode", choices=["dual-mono", "preserve"], default="dual-mono")
+    export_p.add_argument(
+        "--output-format", choices=list(FORMAT_PRESETS), default="hevc-mp4"
+    )
+    export_p.add_argument(
+        "--audio-mode", choices=["dual-mono", "preserve"], default="dual-mono"
+    )
     export_p.add_argument("--volume", type=float, default=1.18)
     export_p.add_argument("--title-set", default="auto")
-    export_p.add_argument("--deinterlace", choices=["auto", "always", "never"], default="auto")
-    export_p.add_argument("--field-order", choices=["auto", "bff", "tff"], default="auto")
-    export_p.add_argument("--regenerate-timestamps", action=argparse.BooleanOptionalAction, default=True)
+    export_p.add_argument(
+        "--deinterlace", choices=["auto", "always", "never"], default="auto"
+    )
+    export_p.add_argument(
+        "--field-order", choices=["auto", "bff", "tff"], default="auto"
+    )
+    export_p.add_argument(
+        "--regenerate-timestamps", action=argparse.BooleanOptionalAction, default=True
+    )
     export_p.add_argument("--video-bitrate", default="4500k")
     export_p.add_argument("--maxrate", default="6500k")
     export_p.add_argument("--bufsize", default="9000k")
@@ -1113,7 +1332,9 @@ def build_parser() -> argparse.ArgumentParser:
     export_p.add_argument("--allow-output-inside-source", action="store_true")
     export_p.set_defaults(func=export)
 
-    clean_p = sub.add_parser("clean", help="Remove derived intermediate files from an output directory")
+    clean_p = sub.add_parser(
+        "clean", help="Remove derived intermediate files from an output directory"
+    )
     clean_p.add_argument("output_dir")
     clean_p.set_defaults(func=clean)
 

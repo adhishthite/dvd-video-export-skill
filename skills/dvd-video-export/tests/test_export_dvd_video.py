@@ -97,14 +97,18 @@ class DVDVideoExportTests(unittest.TestCase):
         quoted = dvd.ffconcat_quote(Path("/tmp/O'Brien/part.mp4"))
         self.assertEqual(quoted, "'/tmp/O'\\''Brien/part.mp4'")
 
-    def test_validate_paths_refuses_output_inside_source_before_creating_directory(self):
+    def test_validate_paths_refuses_output_inside_source_before_creating_directory(
+        self,
+    ):
         with tempfile.TemporaryDirectory() as tmp:
             source = Path(tmp) / "source"
             source.mkdir()
             output = source / "exports"
 
             with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
-                dvd.validate_paths(source, output, allow_inside=False, create_output=True)
+                dvd.validate_paths(
+                    source, output, allow_inside=False, create_output=True
+                )
 
             self.assertFalse(output.exists())
 
@@ -115,7 +119,13 @@ class DVDVideoExportTests(unittest.TestCase):
             disc = dvd.discover_discs(video_ts)[0]
 
             with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
-                dvd.validate_paths(video_ts, video_ts.parent, allow_inside=False, create_output=True, discs=[disc])
+                dvd.validate_paths(
+                    video_ts,
+                    video_ts.parent,
+                    allow_inside=False,
+                    create_output=True,
+                    discs=[disc],
+                )
 
     def test_validate_paths_dry_run_does_not_create_output_directory(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -141,7 +151,9 @@ class DVDVideoExportTests(unittest.TestCase):
     def test_audio_filter_handles_mono_and_multichannel_dual_mono(self):
         args = argparse.Namespace(audio_mode="dual-mono", volume=1.0)
         with mock.patch.object(dvd, "ffprobe_audio_info", return_value={"channels": 1}):
-            self.assertEqual(dvd.audio_filter(args, Path("in.mp4")), "pan=stereo|c0=c0|c1=c0")
+            self.assertEqual(
+                dvd.audio_filter(args, Path("in.mp4")), "pan=stereo|c0=c0|c1=c0"
+            )
         with mock.patch.object(dvd, "ffprobe_audio_info", return_value={"channels": 6}):
             self.assertIn("0.5*c2", dvd.audio_filter(args, Path("in.mp4")))
 
@@ -168,8 +180,14 @@ class DVDVideoExportTests(unittest.TestCase):
         )
 
     def test_video_filter_uses_probed_frame_rate_and_field_order(self):
-        args = argparse.Namespace(deinterlace="auto", field_order="auto", regenerate_timestamps=True)
-        disc = dvd.Disc(root=Path("/tmp/dvd"), video_ts=Path("/tmp/dvd/VIDEO_TS"), vobs=[Path("/tmp/dvd/VIDEO_TS/VTS_01_1.VOB")])
+        args = argparse.Namespace(
+            deinterlace="auto", field_order="auto", regenerate_timestamps=True
+        )
+        disc = dvd.Disc(
+            root=Path("/tmp/dvd"),
+            video_ts=Path("/tmp/dvd/VIDEO_TS"),
+            vobs=[Path("/tmp/dvd/VIDEO_TS/VTS_01_1.VOB")],
+        )
         with mock.patch.object(
             dvd,
             "ffprobe_video_info",
@@ -181,8 +199,14 @@ class DVDVideoExportTests(unittest.TestCase):
         self.assertIn("29.970030", vf)
 
     def test_video_filter_does_not_deinterlace_progressive_source(self):
-        args = argparse.Namespace(deinterlace="auto", field_order="auto", regenerate_timestamps=True)
-        disc = dvd.Disc(root=Path("/tmp/dvd"), video_ts=Path("/tmp/dvd/VIDEO_TS"), vobs=[Path("/tmp/dvd/VIDEO_TS/VTS_01_1.VOB")])
+        args = argparse.Namespace(
+            deinterlace="auto", field_order="auto", regenerate_timestamps=True
+        )
+        disc = dvd.Disc(
+            root=Path("/tmp/dvd"),
+            video_ts=Path("/tmp/dvd/VIDEO_TS"),
+            vobs=[Path("/tmp/dvd/VIDEO_TS/VTS_01_1.VOB")],
+        )
         with mock.patch.object(
             dvd,
             "ffprobe_video_info",
@@ -196,7 +220,9 @@ class DVDVideoExportTests(unittest.TestCase):
     def test_stream_ffmpeg_fails_when_warning_threshold_exceeded(self):
         class FakeProc:
             def __init__(self):
-                self.stdout = iter(["Invalid frame dimensions 0x0\n", "time=00:00:01.00 speed=1x\n"])
+                self.stdout = iter(
+                    ["Invalid frame dimensions 0x0\n", "time=00:00:01.00 speed=1x\n"]
+                )
 
             def poll(self):
                 return None
@@ -205,56 +231,102 @@ class DVDVideoExportTests(unittest.TestCase):
                 return 0
 
         with mock.patch.object(dvd.subprocess, "Popen", return_value=FakeProc()):
-            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
-                dvd.stream_ffmpeg(["ffmpeg"], total_duration=10, label="test", max_warnings=0)
+            with (
+                redirect_stdout(io.StringIO()),
+                redirect_stderr(io.StringIO()),
+                self.assertRaises(SystemExit),
+            ):
+                dvd.stream_ffmpeg(
+                    ["ffmpeg"], total_duration=10, label="test", max_warnings=0
+                )
 
     def test_validate_output_fails_on_imbalanced_dual_mono(self):
         summary = {
             "format": {"duration": "100", "size": str(20 * 1024 * 1024)},
             "streams": [
-                {"codec_type": "video", "codec_name": "hevc", "width": 720, "height": 576},
+                {
+                    "codec_type": "video",
+                    "codec_name": "hevc",
+                    "width": 720,
+                    "height": 576,
+                },
                 {"codec_type": "audio", "codec_name": "aac", "channels": 2},
             ],
         }
         with tempfile.TemporaryDirectory() as tmp:
             output = Path(tmp) / "out.mp4"
             touch(output)
-            with mock.patch.object(dvd, "ffprobe_summary", return_value=summary), mock.patch.object(
-                dvd, "astats_sample", return_value=(-20.0, -25.0, -3.0, -3.0)
+            with (
+                mock.patch.object(dvd, "ffprobe_summary", return_value=summary),
+                mock.patch.object(
+                    dvd, "astats_sample", return_value=(-20.0, -25.0, -3.0, -3.0)
+                ),
             ):
-                with redirect_stdout(io.StringIO()), self.assertRaises(dvd.ValidationError):
-                    dvd.validate_output(output, ("00:00:00",), expected_duration=100, expect_balanced=True)
+                with (
+                    redirect_stdout(io.StringIO()),
+                    self.assertRaises(dvd.ValidationError),
+                ):
+                    dvd.validate_output(
+                        output,
+                        ("00:00:00",),
+                        expected_duration=100,
+                        expect_balanced=True,
+                    )
 
     def test_validate_output_fails_on_duration_mismatch(self):
         summary = {
             "format": {"duration": "80", "size": str(20 * 1024 * 1024)},
             "streams": [
-                {"codec_type": "video", "codec_name": "hevc", "width": 720, "height": 576},
+                {
+                    "codec_type": "video",
+                    "codec_name": "hevc",
+                    "width": 720,
+                    "height": 576,
+                },
                 {"codec_type": "audio", "codec_name": "aac", "channels": 2},
             ],
         }
         with tempfile.TemporaryDirectory() as tmp:
             output = Path(tmp) / "out.mp4"
             touch(output)
-            with mock.patch.object(dvd, "ffprobe_summary", return_value=summary), mock.patch.object(
-                dvd, "astats_sample", return_value=(-20.0, -20.0, -3.0, -3.0)
+            with (
+                mock.patch.object(dvd, "ffprobe_summary", return_value=summary),
+                mock.patch.object(
+                    dvd, "astats_sample", return_value=(-20.0, -20.0, -3.0, -3.0)
+                ),
             ):
-                with redirect_stdout(io.StringIO()), self.assertRaises(dvd.ValidationError):
-                    dvd.validate_output(output, ("00:00:00",), expected_duration=100, expect_balanced=True)
+                with (
+                    redirect_stdout(io.StringIO()),
+                    self.assertRaises(dvd.ValidationError),
+                ):
+                    dvd.validate_output(
+                        output,
+                        ("00:00:00",),
+                        expected_duration=100,
+                        expect_balanced=True,
+                    )
 
     def test_validate_output_accepts_h264_when_expected(self):
         summary = {
             "format": {"duration": "100", "size": str(20 * 1024 * 1024)},
             "streams": [
-                {"codec_type": "video", "codec_name": "h264", "width": 720, "height": 576},
+                {
+                    "codec_type": "video",
+                    "codec_name": "h264",
+                    "width": 720,
+                    "height": 576,
+                },
                 {"codec_type": "audio", "codec_name": "aac", "channels": 2},
             ],
         }
         with tempfile.TemporaryDirectory() as tmp:
             output = Path(tmp) / "out.mp4"
             touch(output)
-            with mock.patch.object(dvd, "ffprobe_summary", return_value=summary), mock.patch.object(
-                dvd, "astats_sample", return_value=(-20.0, -20.0, -3.0, -3.0)
+            with (
+                mock.patch.object(dvd, "ffprobe_summary", return_value=summary),
+                mock.patch.object(
+                    dvd, "astats_sample", return_value=(-20.0, -20.0, -3.0, -3.0)
+                ),
             ):
                 with redirect_stdout(io.StringIO()):
                     dvd.validate_output(
@@ -269,15 +341,23 @@ class DVDVideoExportTests(unittest.TestCase):
         summary = {
             "format": {"duration": "91", "size": str(5 * 1024 * 1024)},
             "streams": [
-                {"codec_type": "video", "codec_name": "hevc", "width": 720, "height": 576},
+                {
+                    "codec_type": "video",
+                    "codec_name": "hevc",
+                    "width": 720,
+                    "height": 576,
+                },
                 {"codec_type": "audio", "codec_name": "aac", "channels": 2},
             ],
         }
         with tempfile.TemporaryDirectory() as tmp:
             output = Path(tmp) / "out.mp4"
             touch(output)
-            with mock.patch.object(dvd, "ffprobe_summary", return_value=summary), mock.patch.object(
-                dvd, "astats_sample", return_value=(-20.0, -20.4, -1.0, -1.0)
+            with (
+                mock.patch.object(dvd, "ffprobe_summary", return_value=summary),
+                mock.patch.object(
+                    dvd, "astats_sample", return_value=(-20.0, -20.4, -1.0, -1.0)
+                ),
             ):
                 with redirect_stdout(io.StringIO()):
                     dvd.validate_output(
@@ -324,8 +404,9 @@ class DVDVideoExportTests(unittest.TestCase):
                 allow_output_inside_source=False,
             )
 
-            with mock.patch.object(dvd, "require_tools"), mock.patch.object(
-                dvd, "ffprobe_duration", return_value=60.0
+            with (
+                mock.patch.object(dvd, "require_tools"),
+                mock.patch.object(dvd, "ffprobe_duration", return_value=60.0),
             ):
                 buffer = io.StringIO()
                 with redirect_stdout(buffer):
