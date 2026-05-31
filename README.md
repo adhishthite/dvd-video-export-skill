@@ -37,6 +37,7 @@ npx skills add https://github.com/adhishthite/dvd-video-export-skill/tree/main/s
 
 ## Requirements
 
+- `uv`
 - Python 3.10+
 - `ffmpeg`
 - `ffprobe`
@@ -44,8 +45,10 @@ npx skills add https://github.com/adhishthite/dvd-video-export-skill/tree/main/s
 On macOS with Homebrew:
 
 ```bash
-brew install ffmpeg
+brew install uv ffmpeg
 ```
+
+`ffprobe` is included with the Homebrew `ffmpeg` package.
 
 ## Usage
 
@@ -98,7 +101,7 @@ Run the unit tests:
 uv run -m unittest discover -s skills/dvd-video-export/tests -v
 ```
 
-The tests cover DVD discovery, path guardrails, dry-run behavior, title-set selection, format presets, ffmpeg warning failure, audio filters, validation thresholds, validation failure paths, and cleanup behavior.
+The tests cover dependency preflight, DVD discovery, path guardrails, dry-run behavior, title-set selection, format presets, ffmpeg warning failure, audio filters, validation thresholds, validation failure paths, and cleanup behavior.
 
 ## License
 
