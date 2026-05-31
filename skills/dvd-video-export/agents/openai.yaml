@@ -1,0 +1,4 @@
+interface:
+  display_name: "DVD Video Export"
+  short_description: "Convert DVD rips to validated H.265 MP4"
+  default_prompt: "Use $dvd-video-export to convert this DVD-Video folder into a validated H.265 MP4 with safe audio handling."
