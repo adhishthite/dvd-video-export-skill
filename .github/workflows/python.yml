@@ -1,0 +1,30 @@
+name: Python
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    name: Ruff and Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Check formatting
+        run: uvx ruff format --check skills/dvd-video-export/scripts/export_dvd_video.py skills/dvd-video-export/tests/test_export_dvd_video.py
+
+      - name: Lint
+        run: uvx ruff check skills/dvd-video-export/scripts/export_dvd_video.py skills/dvd-video-export/tests/test_export_dvd_video.py
+
+      - name: Run tests
+        run: uv run -m unittest discover -s skills/dvd-video-export/tests -v
